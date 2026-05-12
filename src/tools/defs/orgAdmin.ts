@@ -1,0 +1,625 @@
+import { z } from "zod";
+import { defineTool } from "./defineTool.js";
+import type { AnyToolDef } from "./defineTool.js";
+import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
+import { InsufficientPermissionsError } from "../../middleware/errorHandler.js";
+
+/**
+ * Org/platform admin tools. Uses GOJIRA_ORG_ADMIN_TOKEN (env-side) and
+ * routes through admin.atlassian.com/admin/v1. Gated on
+ * `GOJIRA_ENABLE_ORG_ADMIN=true` and the per-call caller verification cache.
+ */
+
+function org(ctx: import("../types.js").ToolContext): string {
+  const o = ctx.config.orgAdmin.orgId;
+  if (!o) throw new InsufficientPermissionsError("Org admin orgId not configured");
+  return o;
+}
+
+export const orgAdminTools = (): AnyToolDef[] => [
+  // ---- Users ----
+  defineTool({
+    name: "orgAdmin.listOrgUsers",
+    description: "Paginated list of managed accounts in the org.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { cursor: z.string().optional() },
+    handler: async (input, ctx) => {
+      const q = input.cursor ? `?cursor=${encodeURIComponent(input.cursor)}` : "";
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/users${q}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.getOrgUser",
+    description: "Get a managed account's profile.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { accountId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const resp = await ctx.client
+        .admin()
+        .get<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.provisionUser",
+    description: "Provision a new user. Requires `commit:true`.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: {
+      email: z.string().email(),
+      displayName: z.string().min(1),
+      profile: z.record(z.string(), z.unknown()).optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const body = { email: input.email, displayName: input.displayName, ...(input.profile ?? {}) };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.provisionUser",
+        target: { kind: "org_user", id: input.email },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.provisionUser",
+        cloudId: null,
+        target: { kind: "org_user", id: input.email },
+        before: null,
+        request: body as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/users`, body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, user: entry.after };
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.deactivateUser",
+    description: "Deactivate a managed account. Reversible via restoreUser.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { accountId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}`);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.deactivateUser",
+        target: { kind: "org_user", id: input.accountId },
+        before: before.data,
+        after: { ...(before.data as object), status: "deactivated" },
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.deactivateUser",
+        cloudId: null,
+        target: { kind: "org_user", id: input.accountId },
+        before: before.data,
+        request: { accountId: input.accountId } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "Call restoreUser on the same accountId.",
+        run: async () => {
+          await c.post<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}/lifecycle/disable`);
+          return { deactivated: input.accountId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.restoreUser",
+    description: "Restore a previously deactivated managed account.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { accountId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}`);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.restoreUser",
+        target: { kind: "org_user", id: input.accountId },
+        before: before.data,
+        after: { ...(before.data as object), status: "active" },
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.restoreUser",
+        cloudId: null,
+        target: { kind: "org_user", id: input.accountId },
+        before: before.data,
+        request: { accountId: input.accountId } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "Call deactivateUser on the same accountId.",
+        run: async () => {
+          await c.post<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}/lifecycle/enable`);
+          return { restored: input.accountId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // ---- Group membership ----
+  defineTool({
+    name: "orgAdmin.getUserGroups",
+    description: "List groups for a managed account.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { accountId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const resp = await ctx.client
+        .admin()
+        .get<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}/groups`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.addUserToGroup",
+    description: "Add a user to a group.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { accountId: z.string().min(1), groupId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.addUserToGroup",
+        target: { kind: "org_group_membership", id: input.groupId, parent: input.accountId },
+        before: null,
+        after: { added: true },
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.addUserToGroup",
+        cloudId: null,
+        target: { kind: "org_group_membership", id: input.groupId, parent: input.accountId },
+        before: null,
+        request: { accountId: input.accountId, groupId: input.groupId } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "Call removeUserFromGroup with the same pair.",
+        run: async () => {
+          await ctx.client
+            .admin()
+            .post<unknown>(
+              `/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}/members`,
+              { account_id: input.accountId },
+            );
+          return { added: true };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.removeUserFromGroup",
+    description: "Remove a user from a group.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { accountId: z.string().min(1), groupId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "orgAdmin.removeUserFromGroup",
+          target: { kind: "org_group_membership", id: input.groupId, parent: input.accountId },
+          before: { accountId: input.accountId, groupId: input.groupId },
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.removeUserFromGroup",
+        cloudId: null,
+        target: { kind: "org_group_membership", id: input.groupId, parent: input.accountId },
+        before: { accountId: input.accountId, groupId: input.groupId },
+        request: { accountId: input.accountId, groupId: input.groupId } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "Call addUserToGroup with the same pair.",
+        run: async () => {
+          await ctx.client
+            .admin()
+            .delete<unknown>(
+              `/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}/members/${encodeURIComponent(input.accountId)}`,
+            );
+          return { removed: true };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // ---- Groups ----
+  defineTool({
+    name: "orgAdmin.listGroups",
+    description: "List org-level groups.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { cursor: z.string().optional() },
+    handler: async (input, ctx) => {
+      const q = input.cursor ? `?cursor=${encodeURIComponent(input.cursor)}` : "";
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/groups${q}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.getGroup",
+    description: "Get a group by id.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { groupId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.createGroup",
+    description: "Create an org-level group.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { name: z.string().min(1), description: z.string().optional(), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const body = { name: input.name, description: input.description };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.createGroup",
+        target: { kind: "org_group", name: input.name },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.createGroup",
+        cloudId: null,
+        target: { kind: "org_group", name: input.name },
+        before: null,
+        request: body as Record<string, unknown>,
+        revertible: true,
+        revertHint: "DELETE the created group id.",
+        run: async () => {
+          const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/groups`, body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, group: entry.after };
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.deleteGroup",
+    description: "Delete an org-level group.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { groupId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}`);
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "orgAdmin.deleteGroup",
+          target: { kind: "org_group", id: input.groupId },
+          before: before.data,
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.deleteGroup",
+        cloudId: null,
+        target: { kind: "org_group", id: input.groupId },
+        before: before.data,
+        request: { groupId: input.groupId } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          await c.delete<unknown>(`/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}`);
+          return { deleted: input.groupId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // ---- Org policies ----
+  defineTool({
+    name: "orgAdmin.getOrgPolicies",
+    description: "List org policies (data residency, IP allowlists, etc.).",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { type: z.string().optional() },
+    handler: async (input, ctx) => {
+      const q = input.type ? `?type=${encodeURIComponent(input.type)}` : "";
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/policies${q}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.setOrgPolicy",
+    description: "Set or replace an org policy.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: {
+      policyId: z.string().min(1),
+      body: z.record(z.string(), z.unknown()),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/policies/${encodeURIComponent(input.policyId)}`);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.setOrgPolicy",
+        target: { kind: "org_policy", id: input.policyId },
+        before: before.data,
+        after: input.body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.setOrgPolicy",
+        cloudId: null,
+        target: { kind: "org_policy", id: input.policyId },
+        before: before.data,
+        request: { policyId: input.policyId, body: input.body } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "PUT the captured `before` payload back to this policy id.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/orgs/${org(ctx)}/policies/${encodeURIComponent(input.policyId)}`, input.body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // ---- Misc ----
+  defineTool({
+    name: "orgAdmin.listManagedAccounts",
+    description: "List all managed accounts in the org (paged).",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { cursor: z.string().optional() },
+    handler: async (input, ctx) => {
+      const q = input.cursor ? `?cursor=${encodeURIComponent(input.cursor)}` : "";
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/managed-accounts${q}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.queryAuditLog",
+    description: "Query org audit log with optional filters.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: {
+      from: z.string().datetime().optional(),
+      to: z.string().datetime().optional(),
+      actor: z.string().optional(),
+      action: z.string().optional(),
+      product: z.string().optional(),
+      cursor: z.string().optional(),
+      limit: z.number().int().positive().max(500).default(100).optional(),
+    },
+    handler: async (input, ctx) => {
+      const p = new URLSearchParams();
+      if (input.from) p.set("from", input.from);
+      if (input.to) p.set("to", input.to);
+      if (input.actor) p.set("actor", input.actor);
+      if (input.action) p.set("action", input.action);
+      if (input.product) p.set("product", input.product);
+      if (input.cursor) p.set("cursor", input.cursor);
+      p.set("limit", String(input.limit ?? 100));
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/events?${p.toString()}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.listVerifiedDomains",
+    description: "List verified domains owned by the org.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    handler: async (_input, ctx) => {
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/domains`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.verifyDomain",
+    description: "Claim a domain for org-wide management.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { domain: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const body = { domain: input.domain };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.verifyDomain",
+        target: { kind: "org_domain", id: input.domain },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.verifyDomain",
+        cloudId: null,
+        target: { kind: "org_domain", id: input.domain },
+        before: null,
+        request: body as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/domains`, body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.listInstalledApps",
+    description: "List Marketplace apps installed across the org's products.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    handler: async (_input, ctx) => {
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/apps`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.getApp",
+    description: "Get an installed Marketplace app's details.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    input: { appId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/apps/${encodeURIComponent(input.appId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.removeApp",
+    description: "Remove a Marketplace app from the org.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { appId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/apps/${encodeURIComponent(input.appId)}`);
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "orgAdmin.removeApp",
+          target: { kind: "org_app", id: input.appId },
+          before: before.data,
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.removeApp",
+        cloudId: null,
+        target: { kind: "org_app", id: input.appId },
+        before: before.data,
+        request: { appId: input.appId } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          await c.delete<unknown>(`/orgs/${org(ctx)}/apps/${encodeURIComponent(input.appId)}`);
+          return { removed: input.appId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // ---- Rovo MCP settings ----
+  defineTool({
+    name: "orgAdmin.getRovoMcpSettings",
+    description: "Read the org-level settings governing the Atlassian Rovo MCP endpoint.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    handler: async (_input, ctx) => {
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/mcp-settings`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.setRovoMcpAllowedDomains",
+    description: "Replace the Rovo MCP allowed domain list.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { domains: z.array(z.string()).min(0), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/mcp-settings`);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.setRovoMcpAllowedDomains",
+        target: { kind: "rovo_mcp_settings" },
+        before: before.data,
+        after: { ...(before.data as object), allowedDomains: input.domains },
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.setRovoMcpAllowedDomains",
+        cloudId: null,
+        target: { kind: "rovo_mcp_settings" },
+        before: before.data,
+        request: { domains: input.domains } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "Re-issue setRovoMcpAllowedDomains with the captured `before.allowedDomains`.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/orgs/${org(ctx)}/mcp-settings/allowed-domains`, {
+            allowedDomains: input.domains,
+          });
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "orgAdmin.setRovoMcpApiTokenAuth",
+    description: "Enable or disable API token auth on the org's Rovo MCP.",
+    group: "admin_org",
+    authMethod: "org_admin",
+    needsCloudId: false,
+    destructive: true,
+    input: { enabled: z.boolean(), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const c = ctx.client.admin();
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/mcp-settings`);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "orgAdmin.setRovoMcpApiTokenAuth",
+        target: { kind: "rovo_mcp_settings" },
+        before: before.data,
+        after: { ...(before.data as object), apiTokenAuthEnabled: input.enabled },
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "orgAdmin.setRovoMcpApiTokenAuth",
+        cloudId: null,
+        target: { kind: "rovo_mcp_settings" },
+        before: before.data,
+        request: { enabled: input.enabled } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "Call setRovoMcpApiTokenAuth with the captured `before.apiTokenAuthEnabled`.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/orgs/${org(ctx)}/mcp-settings/api-token-auth`, { enabled: input.enabled });
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+];

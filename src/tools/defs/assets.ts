@@ -1,0 +1,714 @@
+import { z } from "zod";
+import { defineTool } from "./defineTool.js";
+import type { AnyToolDef } from "./defineTool.js";
+import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
+import { getAssetsWorkspaceId } from "../../atlassian/assetsWorkspace.js";
+import { ToolError } from "../../middleware/errorHandler.js";
+
+/**
+ * Assets (Insight) — API token side-channel.
+ *
+ * The Assets API is rooted at api.atlassian.com/jsm/assets/workspace/<wsId>/v1.
+ * We discover wsId per cloudId via the OAuth-authed JSM endpoint and cache
+ * for 24h (see atlassian/assetsWorkspace.ts).
+ */
+
+async function workspace(ctx: import("../types.js").ToolContext): Promise<string> {
+  if (!ctx.cloudId) throw new ToolError("VALIDATION_ERROR", "cloudId required for Assets calls");
+  // Discovery requires OAuth + JSM scopes.
+  if (!ctx.storedToken)
+    throw new ToolError(
+      "AUTH_REQUIRED",
+      "Assets workspace discovery requires an OAuth grant with JSM scopes; the bound API token alone is insufficient for discovery.",
+    );
+  return getAssetsWorkspaceId(ctx.redis, ctx.cloudId, ctx.storedToken.access_token);
+}
+
+export const assetsTools = (): AnyToolDef[] => [
+  defineTool({
+    name: "assets.listObjectSchemas",
+    description: "List Assets object schemas in this workspace.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    handler: async (_input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>("/objectschema/list");
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.getObjectSchema",
+    description: "Get a single object schema by id.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { schemaId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.createObjectSchema",
+    description: "Create a new object schema. Destructive — requires `commit:true`.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      name: z.string().min(1),
+      objectSchemaKey: z.string().min(1),
+      description: z.string().optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const body = {
+        name: input.name,
+        objectSchemaKey: input.objectSchemaKey,
+        description: input.description,
+      };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.createObjectSchema",
+        target: { kind: "asset_schema", name: input.name },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.createObjectSchema",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_schema", name: input.name },
+        before: null,
+        request: body as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client.assets(ws).post<unknown>("/objectschema/create", body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, schema: entry.after };
+    },
+  }),
+  defineTool({
+    name: "assets.updateObjectSchema",
+    description: "Update an object schema's name/key/description.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      schemaId: z.string().min(1),
+      name: z.string().optional(),
+      objectSchemaKey: z.string().optional(),
+      description: z.string().optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`);
+      const body: Record<string, unknown> = {};
+      if (input.name !== undefined) body.name = input.name;
+      if (input.objectSchemaKey !== undefined) body.objectSchemaKey = input.objectSchemaKey;
+      if (input.description !== undefined) body.description = input.description;
+      const after = { ...(before.data as object), ...body };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.updateObjectSchema",
+        target: { kind: "asset_schema", id: input.schemaId },
+        before: before.data,
+        after,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.updateObjectSchema",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_schema", id: input.schemaId },
+        before: before.data,
+        request: body,
+        revertible: true,
+        revertHint: "PUT the captured `before` payload back to the same schema id.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`, body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // Object types
+  defineTool({
+    name: "assets.listObjectTypes",
+    description: "List object types within a schema.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { schemaId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}/objecttypes/flat`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.getObjectType",
+    description: "Get an object type by id.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { objectTypeId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.createObjectType",
+    description: "Create an object type inside a schema. Destructive — requires `commit:true`.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      schemaId: z.string().min(1),
+      name: z.string().min(1),
+      description: z.string().optional(),
+      iconId: z.string().optional(),
+      inherited: z.boolean().optional(),
+      parentObjectTypeId: z.string().optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const body: Record<string, unknown> = {
+        name: input.name,
+        description: input.description,
+        iconId: input.iconId,
+        inherited: input.inherited,
+        parentObjectTypeId: input.parentObjectTypeId,
+        objectSchemaId: input.schemaId,
+      };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.createObjectType",
+        target: { kind: "asset_object_type", name: input.name, parent: input.schemaId },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.createObjectType",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object_type", name: input.name, parent: input.schemaId },
+        before: null,
+        request: body,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client.assets(ws).post<unknown>("/objecttype/create", body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, objectType: entry.after };
+    },
+  }),
+  defineTool({
+    name: "assets.updateObjectType",
+    description: "Update an object type.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectTypeId: z.string().min(1),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      iconId: z.string().optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}`);
+      const body: Record<string, unknown> = {};
+      if (input.name !== undefined) body.name = input.name;
+      if (input.description !== undefined) body.description = input.description;
+      if (input.iconId !== undefined) body.iconId = input.iconId;
+      const after = { ...(before.data as object), ...body };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.updateObjectType",
+        target: { kind: "asset_object_type", id: input.objectTypeId },
+        before: before.data,
+        after,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.updateObjectType",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object_type", id: input.objectTypeId },
+        before: before.data,
+        request: body,
+        revertible: true,
+        revertHint: "PUT the captured `before` payload back.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}`, body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  defineTool({
+    name: "assets.getObjectTypeAttributes",
+    description: "List attributes of an object type.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { objectTypeId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}/attributes`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.createObjectTypeAttribute",
+    description: "Add an attribute to an object type.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectTypeId: z.string().min(1),
+      attribute: z.record(z.string(), z.unknown()),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.createObjectTypeAttribute",
+        target: { kind: "asset_attribute", parent: input.objectTypeId, name: (input.attribute as { name?: string }).name ?? "(unnamed)" },
+        before: null,
+        after: input.attribute,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.createObjectTypeAttribute",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_attribute", parent: input.objectTypeId, name: (input.attribute as { name?: string }).name ?? "(unnamed)" },
+        before: null,
+        request: { attribute: input.attribute } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client
+            .assets(ws)
+            .post<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}/attribute/create`, input.attribute);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, attribute: entry.after };
+    },
+  }),
+  defineTool({
+    name: "assets.updateObjectTypeAttribute",
+    description: "Update an attribute on an object type.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      attributeId: z.string().min(1),
+      attribute: z.record(z.string(), z.unknown()),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/objecttypeattribute/${encodeURIComponent(input.attributeId)}`);
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.updateObjectTypeAttribute",
+        target: { kind: "asset_attribute", id: input.attributeId },
+        before: before.data,
+        after: input.attribute,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.updateObjectTypeAttribute",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_attribute", id: input.attributeId },
+        before: before.data,
+        request: { attribute: input.attribute } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "PUT the captured `before` payload back.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/objecttypeattribute/${encodeURIComponent(input.attributeId)}`, input.attribute);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  defineTool({
+    name: "assets.aqlSearch",
+    description: "AQL (Assets Query Language) search.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: {
+      qlQuery: z.string().min(1),
+      page: z.number().int().positive().default(1).optional(),
+      resultPerPage: z.number().int().positive().max(500).default(25).optional(),
+      includeAttributes: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).post<unknown>("/aql/objects", {
+        qlQuery: input.qlQuery,
+        page: input.page ?? 1,
+        resultPerPage: input.resultPerPage ?? 25,
+        includeAttributes: input.includeAttributes ?? true,
+      });
+      return resp.data;
+    },
+  }),
+
+  // Object CRUD
+  defineTool({
+    name: "assets.getObject",
+    description: "Get an Assets object by id.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { objectId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/object/${encodeURIComponent(input.objectId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.createObject",
+    description: "Create an Assets object.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectTypeId: z.string().min(1),
+      attributes: z.array(z.record(z.string(), z.unknown())).min(1),
+      hasAvatar: z.boolean().optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const body = {
+        objectTypeId: input.objectTypeId,
+        attributes: input.attributes,
+        hasAvatar: input.hasAvatar ?? false,
+      };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.createObject",
+        target: { kind: "asset_object", parent: input.objectTypeId },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.createObject",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object", parent: input.objectTypeId },
+        before: null,
+        request: body as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client.assets(ws).post<unknown>("/object/create", body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, object: entry.after };
+    },
+  }),
+  defineTool({
+    name: "assets.updateObject",
+    description: "Update an Assets object's attributes.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectId: z.string().min(1),
+      attributes: z.array(z.record(z.string(), z.unknown())).min(1),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/object/${encodeURIComponent(input.objectId)}`);
+      const after = { ...(before.data as object), attributes: input.attributes };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.updateObject",
+        target: { kind: "asset_object", id: input.objectId },
+        before: before.data,
+        after,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.updateObject",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object", id: input.objectId },
+        before: before.data,
+        request: { attributes: input.attributes } as Record<string, unknown>,
+        revertible: true,
+        revertHint: "PUT the captured `before.attributes` back.",
+        run: async () => {
+          const resp = await c.put<unknown>(`/object/${encodeURIComponent(input.objectId)}`, { attributes: input.attributes });
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "assets.deleteObject",
+    description: "Delete an Assets object. Irreversible.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: { objectId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/object/${encodeURIComponent(input.objectId)}`);
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "assets.deleteObject",
+          target: { kind: "asset_object", id: input.objectId },
+          before: before.data,
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.deleteObject",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object", id: input.objectId },
+        before: before.data,
+        request: { objectId: input.objectId } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          await c.delete<unknown>(`/object/${encodeURIComponent(input.objectId)}`);
+          return { deleted: input.objectId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  // References
+  defineTool({
+    name: "assets.getObjectReferences",
+    description: "List references for an Assets object.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { objectId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/object/${encodeURIComponent(input.objectId)}/referenceinfo`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.addObjectReference",
+    description: "Add a reference between two Assets objects.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectId: z.string().min(1),
+      targetObjectId: z.string().min(1),
+      referenceTypeId: z.string().min(1),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const body = { targetObjectId: input.targetObjectId, referenceTypeId: input.referenceTypeId };
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.addObjectReference",
+        target: { kind: "asset_reference", parent: input.objectId },
+        before: null,
+        after: body,
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.addObjectReference",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_reference", parent: input.objectId },
+        before: null,
+        request: body,
+        revertible: true,
+        revertHint: "Call removeObjectReference with the same triple.",
+        run: async () => {
+          const resp = await ctx.client.assets(ws).post<unknown>(`/object/${encodeURIComponent(input.objectId)}/reference`, body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "assets.removeObjectReference",
+    description: "Remove a reference between two Assets objects.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectId: z.string().min(1),
+      targetObjectId: z.string().min(1),
+      referenceTypeId: z.string().min(1),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const body = { targetObjectId: input.targetObjectId, referenceTypeId: input.referenceTypeId };
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "assets.removeObjectReference",
+          target: { kind: "asset_reference", parent: input.objectId },
+          before: body,
+          message: "Would remove the reference. Re-invoke with `commit:true` to apply.",
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.removeObjectReference",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_reference", parent: input.objectId },
+        before: body,
+        request: body,
+        revertible: true,
+        revertHint: "Call addObjectReference with the same triple.",
+        run: async () => {
+          const resp = await ctx.client
+            .assets(ws)
+            .delete<unknown>(
+              `/object/${encodeURIComponent(input.objectId)}/reference?targetObjectId=${encodeURIComponent(input.targetObjectId)}&referenceTypeId=${encodeURIComponent(input.referenceTypeId)}`,
+            );
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
+  defineTool({
+    name: "assets.getObjectAttachments",
+    description: "List attachments on an Assets object.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { objectId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/attachments/object/${encodeURIComponent(input.objectId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "assets.getObjectHistory",
+    description: "Get the change history for an Assets object.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { objectId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const resp = await ctx.client.assets(ws).get<unknown>(`/object/${encodeURIComponent(input.objectId)}/history`);
+      return resp.data;
+    },
+  }),
+
+  defineTool({
+    name: "assets.importAssetsFromCsv",
+    description:
+      "Kick off an Assets CSV import. Expects an import-config id and either a CSV URL or inline CSV.",
+    group: "write_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      importConfigurationId: z.string().min(1),
+      csvUrl: z.string().url().optional(),
+      csvInline: z.string().optional(),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const body: Record<string, unknown> = {
+        importConfigurationId: input.importConfigurationId,
+      };
+      if (input.csvUrl) body.csvUrl = input.csvUrl;
+      if (input.csvInline) body.csvData = input.csvInline;
+      const dry = buildDryRunIfNotCommitted(input, {
+        tool: "assets.importAssetsFromCsv",
+        target: { kind: "asset_import", id: input.importConfigurationId },
+        before: null,
+        after: { ...body, csvData: input.csvInline ? "[INLINE_CSV]" : undefined },
+      });
+      if (dry) return dry;
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.importAssetsFromCsv",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_import", id: input.importConfigurationId },
+        before: null,
+        request: { importConfigurationId: input.importConfigurationId, hasCsvUrl: !!input.csvUrl, hasInline: !!input.csvInline } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          const resp = await ctx.client.assets(ws).post<unknown>("/imports/start", body);
+          return resp.data;
+        },
+      });
+      return { ok: true, journal_id: entry.opId, run: entry.after };
+    },
+  }),
+
+  defineTool({
+    name: "assets.exportAssetSchema",
+    description: "Export a schema's full definition as JSON. Useful for backup before destructive ops.",
+    group: "read_assets",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { schemaId: z.string().min(1) },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const [schema, types, attrs] = await Promise.all([
+        c.get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`),
+        c.get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}/objecttypes/flat`),
+        c.get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}/attributes`),
+      ]);
+      return {
+        schema: schema.data,
+        objectTypes: types.data,
+        attributes: attrs.data,
+        exported_at: new Date().toISOString(),
+      };
+    },
+  }),
+];

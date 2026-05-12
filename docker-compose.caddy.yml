@@ -1,0 +1,38 @@
+# Overlay: adds Caddy 2 as a TLS-terminating reverse proxy in front of gojira-mcp.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Required env vars:
+#   CADDY_DOMAIN — public hostname, e.g. gojira.example.com
+#
+# The gojira-mcp service stays bound on :8081 internally; only Caddy is published.
+
+services:
+  gojira-mcp:
+    ports: !reset []
+    expose:
+      - "8081"
+    environment:
+      MCP_SERVER_URL: "https://${CADDY_DOMAIN}"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: gojira-caddy
+    restart: unless-stopped
+    depends_on:
+      - gojira-mcp
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      CADDY_DOMAIN: "${CADDY_DOMAIN}"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks: [internal]
+
+volumes:
+  caddy-data:
+  caddy-config:
