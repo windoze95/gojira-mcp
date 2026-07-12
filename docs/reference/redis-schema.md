@@ -21,7 +21,11 @@ TTLs and types are exact; sizes are typical.
 | `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible. |
 | `op_journal_idx:<accountId>` | Sorted set (score = completedAt ms) | same | none | Index for `gojira.listRecentOperations`. |
 | `assets_workspace:<cloudId>` | String | 24 hours | none | Cached Assets workspaceId per cloud site. |
-| `org_admin_verified:<accountId>` | String (`yes` \| `no`) | 5 min | none | admin_org caller verification cache. |
+
+There is deliberately **no key for org-admin caller verification**.
+That gate is a static allowlist read from `GOJIRA_ORG_ADMIN_ACCOUNT_IDS`
+at process start (see [org-admin token](../oauth/org-admin-token.md)) —
+nothing to cache, nothing to invalidate.
 
 ## Naming conventions
 

@@ -114,41 +114,101 @@ the bound API-token client) and always resolves a cloudId. If the journal
 entry's `cloudId` differs from the cloudId the revert call resolves to,
 the revert is refused rather than replayed against the wrong site.
 
+Two containment properties follow from this. The reverter executes with
+the **caller's** credentials, not some stored ambient admin credential —
+so a revert can never do anything the caller could not have done directly.
+And journal lookup is scoped by `accountId`, so one user cannot revert
+another user's operation; an `op_id` they do not own simply does not
+resolve.
+
+This is the complete registry — a tool not listed below has no reverter,
+and `gojira.revertOperation` will refuse it even if you think it "should"
+be undoable.
+
 ### Revertible daily-admin operations
 
 | Tool | Inverse |
 |---|---|
-| `projects.archiveJiraProject` | `POST /rest/api/3/project/{key}/restore` |
+| `projects.archiveJiraProject` | `POST /rest/api/3/project/{id}/restore` |
+| `projects.deleteJiraProject` | `POST /rest/api/3/project/{key}/restore` — **only** when the delete used `enableUndo:true` (trash). A permanent delete journals the fact and the reverter refuses. |
 | `customfields.createCustomField` | `DELETE /rest/api/3/field/{id}` |
+| `customfields.updateCustomField` | `PUT` the captured `before` name/description/searcherKey back |
+| `customfields.assignCustomFieldToProjects` | remove the recorded project ids from the context again |
 | `automation.createAutomationRule` | disable, then `DELETE /rule/{uuid}` |
 | `automation.createRuleFromTemplate` | disable, then `DELETE /rule/{uuid}` |
 | `automation.updateAutomationRule` | `PUT` the captured `before` rule back to the same UUID |
 | `automation.enableAutomationRule` | `PUT /rule/{uuid}/state` restoring the captured prior state (`{value: ...}`) |
 | `automation.disableAutomationRule` | `PUT /rule/{uuid}/state` restoring the captured prior state (`{value: ...}`) |
-| `jsm.createQueue` | `DELETE` the queue |
-| `jsm.createRequestType` | `DELETE` the request type |
+| `jsm.createRequestType` | `DELETE` the created request type |
+| `jsm.addCustomersToOrganization` | remove the customers it added from the organization |
+| `jsm.removeCustomersFromOrganization` | add the customers it removed back to the organization |
+| `forms.createFormTemplate` | `DELETE` the created form template |
+| `forms.updateFormTemplate` | `PUT` the captured `before` template back |
+| `assets.updateObjectSchema` | `PUT` the captured `before` name/key/description back |
+| `assets.updateObjectType` | `PUT` the captured `before` object type back |
+| `assets.updateObjectTypeAttribute` | `PUT` the captured `before` attribute back |
+| `assets.updateObject` | `PUT` the captured `before` attribute values back |
 
-### Revertible schemes/workflows operations
+Assets *creates* are not revertible; only the four `assets.update*` tools
+are.
+
+### Revertible schemes/workflows/Confluence operations
 
 | Tool | Inverse |
 |---|---|
 | `schemes.assignPermissionSchemeToProject` | reassign the captured `before.id` |
 | `schemes.createPermissionScheme` | DELETE the created scheme |
+| `schemes.updatePermissionScheme` | `PUT` the captured `before` scheme back |
 | `schemes.createNotificationScheme` | DELETE the created scheme |
-| `workflows.createWorkflow` | DELETE the created workflow |
+| `schemes.updateNotificationScheme` | `PUT` the captured `before` scheme back |
+| `workflows.createWorkflow` | DELETE the created workflow(s) by entity id |
 | `confluence.createConfluenceSpace` | DELETE the created space |
+| `confluence.updateConfluenceSpace` | `PUT` the captured `before` space back |
+| `confluence.setContentRestrictions` | `PUT` the captured `before` restrictions back, or DELETE to clear them when there were none |
+
+### Revertible agile & views operations
+
+| Tool | Inverse |
+|---|---|
+| `agile.updateSprint` | `POST` the captured `before` sprint back |
+| `filters.updateFilter` | `PUT` the captured `before` filter back |
+| `dashboards.updateDashboard` | `PUT` the captured `before` dashboard back |
 
 ### Intentionally irreversible
 
 Some destructive operations have no programmatic inverse and are journaled
-anyway (so you can see *what* was deleted) but cannot be reverted by the
+anyway (so you can see *what* was changed) but cannot be reverted by the
 server:
 
-- `projects.deleteJiraProject` (unless `enableUndo:true` was used)
-- `customfields.deleteCustomField`
-- `confluence.deleteConfluenceSpace`
-- `*.delete*` for queues/request-types/SLAs/forms
-- destructive ops on Assets (Atlassian's APIs don't expose un-delete)
+- `projects.deleteJiraProject` when `enableUndo:true` was **not** used — a
+  permanent delete has no undo
+- `projects.createJiraProject` — archiving a project is not the same as
+  un-creating it, and deletion is a separately gated operation
+- the deletes: `customfields.deleteCustomField`,
+  `confluence.deleteConfluenceSpace`, `workflows.deleteWorkflow`,
+  `schemes.deletePermissionScheme`, `schemes.deleteNotificationScheme`,
+  `jsm.deleteRequestType`, `forms.deleteFormTemplate`,
+  `assets.deleteObject`, `automation.deleteAutomationRule`,
+  `filters.deleteFilter`, `dashboards.deleteDashboard`
+- the Assets and filter/dashboard/sprint *creates* (`assets.createObject`,
+  `assets.createObjectSchema`, `assets.createObjectType`,
+  `assets.createObjectTypeAttribute`, `filters.createFilter`,
+  `dashboards.createDashboard`, `agile.createSprint`)
+- `assets.startImport` — an import cannot be un-run
+- `workflows.updateWorkflow` — the full `before` of every targeted workflow
+  *is* captured, but undo means re-applying it yourself through
+  `updateWorkflow`; there is no registered reverter
+- `customfields.setCustomFieldOptions` — an upsert, not a replace: it can
+  add options but never remove them, so re-applying `before` would not undo
+  a create
+- `workflows.publishWorkflowSchemeDraft` — a publish cannot be un-published
+- **every `orgAdmin.*` write** — deliberately excluded. Reverting a user
+  deactivation, a group membership, or an org policy is a privilege-escalation
+  vector, so these journal `revertible: false` by design even where an inverse
+  API exists.
+
+Note that queues carry no writes at all (the public API is read-only), so
+there is no queue delete to revert.
 
 For these the `revertHint` field in the journal entry tells the operator
 how to manually restore (if possible) — e.g., from a Confluence space

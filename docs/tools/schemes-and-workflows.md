@@ -12,19 +12,19 @@ and the isolated `delete_projects` group.
 **Credential:** OAuth.
 
 ### Permission schemes
-- `schemes.listPermissionSchemes`.
+- `schemes.listPermissionSchemes()` — no pagination; returns the full list.
 - `schemes.getPermissionScheme(schemeId, expand[]?)`.
-- `schemes.createPermissionScheme(name, description?, permissions[]?)` — destructive, revertible.
-- `schemes.updatePermissionScheme(schemeId, name?, description?, permissions[]?)` — destructive, revertible.
-- `schemes.deletePermissionScheme(schemeId)` — destructive, irreversible.
-- `schemes.assignPermissionSchemeToProject(projectKeyOrId, schemeId)` — destructive, **revertible** (restores prior scheme).
+- `schemes.createPermissionScheme(name, description?, permissions[]?, commit)` — destructive, revertible.
+- `schemes.updatePermissionScheme(schemeId, name?, description?, permissions[]?, commit)` — destructive, revertible. PUT-replace semantics.
+- `schemes.deletePermissionScheme(schemeId, commit)` — destructive, irreversible.
+- `schemes.assignPermissionSchemeToProject(projectKeyOrId, schemeId, commit)` — destructive, **revertible** (restores prior scheme).
 
 ### Notification schemes
 - `schemes.listNotificationSchemes(startAt?, maxResults?)`.
 - `schemes.getNotificationScheme(schemeId, expand[]?)`.
-- `schemes.createNotificationScheme(name, description?, notificationSchemeEvents[]?)` — destructive, revertible.
-- `schemes.updateNotificationScheme(schemeId, name?, description?)` — destructive, revertible.
-- `schemes.deleteNotificationScheme(schemeId)` — destructive, irreversible.
+- `schemes.createNotificationScheme(name, description?, notificationSchemeEvents[]?, commit)` — destructive, revertible.
+- `schemes.updateNotificationScheme(schemeId, name?, description?, commit)` — destructive, revertible.
+- `schemes.deleteNotificationScheme(schemeId, commit)` — destructive, irreversible.
 
 ### Workflow schemes (read-only here)
 - `schemes.listWorkflowSchemes(startAt?, maxResults?)`.
@@ -47,51 +47,90 @@ and the isolated `delete_projects` group.
 
 **Credential:** OAuth.
 
-- `workflows.listWorkflows(startAt?, maxResults?, workflowName?)`.
-- `workflows.getWorkflow(workflowId)`.
-- `workflows.createWorkflow(name, description?, statuses[]?, transitions[]?)` — destructive, revertible.
-- `workflows.updateWorkflow(workflowId, body)` — destructive, revertible (full-before/full-after diff).
-- `workflows.deleteWorkflow(workflowId)` — destructive, irreversible.
+- `workflows.listWorkflows(startAt?, maxResults?, queryString?)` — `queryString` is a case-insensitive substring match on the workflow name. Each result includes its statuses and transitions inline.
+- `workflows.getWorkflow(workflowId)` — `workflowId` is a workflow **name or entity id**.
 - `workflows.getWorkflowTransitions(workflowId)`.
-- `workflows.addWorkflowTransition(workflowId, transition)` — destructive.
-- `workflows.removeWorkflowTransition(workflowId, transitionId)` — destructive.
 - `workflows.getWorkflowConditions(workflowId, transitionId)`.
-- `workflows.getWorkflowPostFunctions(workflowId, transitionId)`.
 - `workflows.getWorkflowValidators(workflowId, transitionId)`.
-- `workflows.publishWorkflow(workflowId, statusMappings[]?)` — destructive, **async with poll**.
+- `workflows.getWorkflowPostFunctions(workflowId, transitionId)`.
+- `workflows.validateCreateWorkflow(payload)` — dry-run validation, no changes. Body shape matches `createWorkflow.payload`.
+- `workflows.createWorkflow(payload, commit)` — destructive, revertible.
+- `workflows.updateWorkflow(payload, commit)` — destructive, **not auto-revertible** (see below).
+- `workflows.deleteWorkflow(workflowId, commit)` — destructive, irreversible. The workflow must not be in use by any scheme.
+- `workflows.publishWorkflowSchemeDraft(schemeId, statusMappings[]?, commit)` — destructive, **async with poll**.
 
-### About `publishWorkflow`
+The condition/validator/post-function getters are conveniences, not
+separate endpoints: the current API carries those rules inline on each
+transition, so these tools read the workflow and project the requested
+rule field off the matching transition.
 
-Atlassian's publish endpoint is asynchronous; it returns a `taskId` and
-the actual publish runs in the background. gojira-mcp polls
-`/rest/api/3/task/{taskId}` every 1.5 s for up to 10 attempts (~15 s
-wall clock). If the publish completes within that window, the tool
-returns the final task status. Otherwise it returns:
+### There is no per-transition endpoint
+
+Jira Cloud has **no** REST endpoint for adding or removing a single
+transition. Transition, condition, validator and post-function changes
+all go through the bulk update API, i.e. `workflows.updateWorkflow`,
+whose `payload` is the `POST /workflows/update` body:
+
+```json
+{
+  "statuses": [],
+  "workflows": [{ "id": "<entity-id>", "statuses": [], "transitions": [] }]
+}
+```
+
+Read the workflow first (`workflows.getWorkflow`), edit the returned
+definition, and send the whole thing back.
+
+`workflows.updateWorkflow` journals `revertible: false`. It *does*
+capture the full before-state of every targeted workflow, and its
+revert hint says so — but reverting is a manual re-apply of that
+captured `before` through `updateWorkflow`, not a `gojira.revertOperation`
+one-liner.
+
+### About `publishWorkflowSchemeDraft`
+
+Workflow changes go live in Jira Cloud by publishing a workflow
+**scheme's** draft — there is no per-workflow publish. Hence `schemeId`
+(a workflow scheme id, from `GET /rest/api/3/workflowscheme`), not a
+workflow id.
+
+The publish is asynchronous: Jira returns a task id and runs the publish
+in the background. gojira-mcp polls `/rest/api/3/task/{taskId}` up to 15
+times with a backoff (1.5 s growing to a 5 s cap, ~60 s of budget). A
+result whose status is `COMPLETE`, `FAILED`, `CANCELLED` or `DEAD` is
+final. If the budget runs out first, the tool returns:
 
 ```json
 {
   "status": "RUNNING",
   "taskId": "...",
-  "note": "Publish still in progress; check /task/{id} for completion."
+  "note": "Publish still in progress; poll GET /rest/api/3/task/<id> until it is COMPLETE."
 }
 ```
 
-The caller can poll the task themselves or re-fetch the workflow status
-to see whether the publish landed.
+A `RUNNING` result means the publish is **not** done. The caller MUST
+verify completion itself.
 
 `statusMappings[]` describes how in-flight issues should be re-statused
 across the publish. Test changes in a sandbox first.
 
 ## Confluence admin (`read_confluence_admin` / `write_confluence_admin`)
 
-**Credential:** OAuth.
+**Credential:** API token (Basic), **not** OAuth. Every `confluence.*`
+tool is `authMethod: "api_token"` and goes to the site host under
+`/wiki`. OAuth is not an option here — the 3LO path 410s on the v1 space
+API, which is why the API-token client is the only one wired up. Bind a
+token with `gojira.bindApiToken` first.
 
 ### Spaces
-- `confluence.listConfluenceSpaces(cursor?, limit?, type?, status?)`.
+- `confluence.listConfluenceSpaces(cursor?, limit?, type?, status?)` — `type` is `global|personal`, `status` is `current|archived`.
 - `confluence.getConfluenceSpace(spaceId)`.
-- `confluence.createConfluenceSpace(key, name, description?)` — destructive, revertible.
-- `confluence.updateConfluenceSpace(spaceKey, name?, description?)` — destructive, revertible.
-- `confluence.deleteConfluenceSpace(spaceKey)` — destructive, **irreversible** (recover from Confluence-side trash if within retention window).
+- `confluence.createConfluenceSpace(key, name, description?, commit)` — destructive, revertible.
+- `confluence.updateConfluenceSpace(spaceKey, name?, description?, commit)` — destructive, revertible.
+- `confluence.deleteConfluenceSpace(spaceKey, commit)` — destructive, **irreversible** (recover from Confluence-side trash if within retention window).
+
+Note the asymmetry: `getConfluenceSpace` takes a numeric **spaceId**,
+while the update/delete tools take a **spaceKey**.
 
 ### Permissions, templates, blueprints
 - `confluence.listSpacePermissions(spaceId)`.
@@ -100,7 +139,11 @@ across the publish. Test changes in a sandbox first.
 
 ### Content restrictions
 - `confluence.getContentRestrictions(contentId)`.
-- `confluence.setContentRestrictions(contentId, restrictions[])` — destructive, revertible.
+- `confluence.setContentRestrictions(contentId, restrictions[], commit)` — destructive, revertible. Replaces the restriction set.
+
+`setContentRestrictions` requires a **paid** Confluence plan. On
+Confluence Free it 403s on the write while reads keep working — that is
+a licensing limit, not a bug.
 
 ## Delete projects (`delete_projects` — isolated)
 

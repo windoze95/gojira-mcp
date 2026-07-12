@@ -1365,7 +1365,7 @@ Delete a workflow by name or entity id. Irreversible. The workflow must not be i
 
 ### `workflows.publishWorkflowSchemeDraft`
 
-Publish a workflow SCHEME's draft (this is how workflow changes go live in Jira Cloud — there is no per-workflow publish). Async: returns a task id which is polled briefly. `statusMappings` maps old→new statuses for in-flight issues.
+Publish a workflow SCHEME's draft (this is how workflow changes go live in Jira Cloud — there is no per-workflow publish). Asynchronous: Jira runs the publish as a background task, which this tool polls for up to ~60s. A result with status COMPLETE/FAILED/CANCELLED/DEAD is final; if the budget runs out the result is status RUNNING plus the `taskId`, and the caller MUST verify completion itself (GET /rest/api/3/task/{taskId}) — the publish is NOT done yet. `statusMappings` maps old→new statuses for in-flight issues.
 
 - **Group:** `write_workflows`
 - **Auth method:** oauth

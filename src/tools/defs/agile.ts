@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
 import { buildDryRunIfNotCommitted } from "../../consent/dryRun.js";
+import { reverters } from "../../operations/revert.js";
 
 const AGILE = "/rest/agile/1.0";
 
@@ -208,3 +209,21 @@ export const agileTools = (): AnyToolDef[] => [
     },
   }),
 ];
+
+// Reverting a sprint update = POST the prior value of exactly the fields the
+// update touched back to the same sprint. POST /sprint/{id} is a PARTIAL update,
+// so a field the update ADDED (absent from `before`) is sent back as null to
+// clear it rather than left in place.
+reverters.register("agile.updateSprint", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: sprint id missing from target.");
+  const before = entry.before as Record<string, unknown> | null;
+  if (!before) throw new Error("Cannot revert: journal entry has no captured `before` sprint.");
+  const body: Record<string, unknown> = {};
+  for (const k of ["name", "goal", "state", "startDate", "endDate", "completeDate"] as const) {
+    if (k in entry.request) body[k] = before[k] ?? null;
+  }
+  const resp = await ctx.client.jira().post<unknown>(`${AGILE}/sprint/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
+});

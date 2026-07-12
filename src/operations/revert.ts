@@ -4,8 +4,11 @@ import { ValidationError } from "../middleware/errorHandler.js";
 /**
  * A reverter is bound to a (tool, target.kind) pair. It receives the journal
  * entry of the original op and the per-call ToolContext, and performs the
- * inverse mutation. The reverter itself runs through the normal tool path
- * (so it gets journaled too).
+ * inverse mutation. Reverters do NOT journal themselves and are not dispatched
+ * through the normal tool path: gojira.revertOperation invokes the resolved
+ * reverter inside its own ctx.journalOp, which writes one `gojira.revertOperation`
+ * entry (target = the original op's target, before = the original op's after-state,
+ * after = the reverter's return value, revertible = false).
  *
  * Examples of revertible ops:
  *   - custom field create  → delete the field
@@ -30,6 +33,11 @@ class ReverterRegistry {
 
   has(toolName: string): boolean {
     return this.reverters.has(toolName);
+  }
+
+  /** Tool names with a registered reverter (used to audit revert coverage). */
+  names(): string[] {
+    return [...this.reverters.keys()];
   }
 }
 

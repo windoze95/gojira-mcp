@@ -107,23 +107,40 @@ Catastrophic.
 
 **Playbook:**
 
+**Contain first.** The caller passed the gate because their accountId is
+on the `GOJIRA_ORG_ADMIN_ACCOUNT_IDS` allowlist. Remove it from the
+org-admin instance's env and **restart** — the allowlist is read at
+process start, so nothing changes until you do. (Removing their org-admin
+role at admin.atlassian.com does *not* close this gate; the tools run on
+the deployment's `GOJIRA_ORG_ADMIN_TOKEN`, not the caller's credential.
+Do both.)
+
+Then reconstruct and undo:
+
 1. Filter the org-admin audit log by the suspicious `accountId` and
    timeframe.
 2. For each `tool_call` with `outcome:"success"`, look up the
    `operation_id` in the journal for before/after snapshots.
-3. Revert via `gojira.revertOperation` where possible (most `admin_org`
-   destructive ops are revertible — `addUserToGroup`, `removeUserFromGroup`,
-   `deactivateUser`, etc.).
-4. Drop the caller from the org admin roster at admin.atlassian.com if
-   they shouldn't have been there.
-5. Invalidate their org-admin verification cache:
-   ```bash
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-       DEL "org_admin_verified:<accountId>"
-   ```
-6. If a system credential was used to do this (e.g., a shared admin
-   account), add per-user accountability via the org-admin roster
-   itself.
+3. **Undo by hand.** `admin_org` ops are deliberately *not*
+   auto-revertible: `gojira.revertOperation` lives in the `utility` group
+   and is not org-admin gated, so a reverter here would be a way around
+   the gate. Every mutating org-admin journal entry carries
+   `revertible: false` and a `revertHint` naming the inverse tool — call
+   it explicitly, from an allowlisted account:
+
+   | Abused op | Undo with |
+   |---|---|
+   | `deactivateUser` | `orgAdmin.restoreUser` (same accountId) |
+   | `restoreUser` | `orgAdmin.deactivateUser` (same accountId) |
+   | `addUserToGroup` | `orgAdmin.removeUserFromGroup` (same accountId + groupId) |
+   | `removeUserFromGroup` | `orgAdmin.addUserToGroup` (same accountId + groupId) |
+   | `createGroup` | `orgAdmin.deleteGroup` (group id is in the journal `after` payload) |
+   | `setOrgPolicy` | `orgAdmin.setOrgPolicy` with the journal `before` payload as `body` |
+   | `provisionUser`, `deleteGroup` | **irreversible** — remediate at admin.atlassian.com |
+
+4. If the abuse came through a shared credential rather than a person,
+   the allowlist gives you no accountability: split it into per-human
+   accountIds before re-enabling.
 
 ## Incident: Service down
 

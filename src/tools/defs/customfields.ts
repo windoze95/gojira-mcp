@@ -335,3 +335,37 @@ reverters.register("customfields.createCustomField", async (entry, anyCtx) => {
   await ctx.client.jira().delete<unknown>(`/rest/api/3/field/${encodeURIComponent(id)}`);
   return { deleted: id };
 });
+
+// Reverting an update = PUT the captured `before` back. PUT /field/{id} is a
+// PARTIAL update, so `description` is always sent (defaulting to ""): omitting it
+// would leave a newly-added description in place instead of clearing it.
+reverters.register("customfields.updateCustomField", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: custom field id missing from target.");
+  const before = entry.before as { name?: string; description?: string; searcherKey?: string } | null;
+  // PUT /field/{id} requires `name`, so a snapshot without one is unusable.
+  if (!before?.name) throw new Error("Cannot revert: journal entry has no captured `before` field name.");
+  const body: Record<string, unknown> = { name: before.name, description: before.description ?? "" };
+  if (before.searcherKey !== undefined) body.searcherKey = before.searcherKey;
+  const resp = await ctx.client.jira().put<unknown>(`/rest/api/3/field/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
+});
+
+// Reverting an assign = remove exactly the project ids that were assigned. The
+// field id rides on target.parent, the context id on target.id, and the project
+// ids on the journaled request.
+reverters.register("customfields.assignCustomFieldToProjects", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const t = entry.target as { id?: string; parent?: string };
+  if (!t.id || !t.parent) throw new Error("Cannot revert: context id or field id missing from target.");
+  const projectIds = (entry.request as { projectIds?: string[] } | null)?.projectIds;
+  if (!projectIds?.length) throw new Error("Cannot revert: no project ids recorded on the journal entry.");
+  const resp = await ctx.client
+    .jira()
+    .post<unknown>(
+      `/rest/api/3/field/${encodeURIComponent(t.parent)}/context/${encodeURIComponent(t.id)}/project/remove`,
+      { projectIds },
+    );
+  return { removed: projectIds, response: resp.data };
+});

@@ -338,7 +338,8 @@ export const jsmTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "jsm_organization", id: input.organizationId },
         before: null,
-        request: body,
+        // organizationId is the path param, `body` the customer list — the reverter needs both.
+        request: { organizationId: input.organizationId, ...body },
         revertible: true,
         revertHint: "DELETE the same customers from the organization (jsm.removeCustomersFromOrganization).",
         run: async () => {
@@ -381,7 +382,8 @@ export const jsmTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "jsm_organization", id: input.organizationId },
         before: body,
-        request: body,
+        // organizationId is the path param, `body` the customer list — the reverter needs both.
+        request: { organizationId: input.organizationId, ...body },
         revertible: true,
         revertHint: "Re-add the customers (jsm.addCustomersToOrganization).",
         run: async () => {
@@ -434,4 +436,41 @@ reverters.register("jsm.createRequestType", async (entry, anyCtx) => {
     .apiTokenJira()
     .delete<unknown>(`${SD}/servicedesk/${encodeURIComponent(t.parent)}/requesttype/${encodeURIComponent(t.id)}`);
   return { deleted: t.id };
+});
+
+/**
+ * Both org-membership tools call the SAME endpoint with opposite verbs
+ * (POST adds, DELETE removes) and the same {usernames?, accountIds?} body, so
+ * each is the other's inverse. Rebuild that call from the journal entry.
+ */
+function organizationUserCall(entry: import("../../operations/journal.js").JournalEntry): {
+  path: string;
+  body: Record<string, unknown>;
+} {
+  const req = (entry.request ?? {}) as { organizationId?: string; usernames?: string[]; accountIds?: string[] };
+  const organizationId = req.organizationId ?? (entry.target as { id?: string }).id;
+  if (!organizationId) throw new Error("Cannot revert: organizationId missing from the journal entry.");
+  const body: Record<string, unknown> = {};
+  if (req.usernames?.length) body.usernames = req.usernames;
+  if (req.accountIds?.length) body.accountIds = req.accountIds;
+  if (Object.keys(body).length === 0) {
+    throw new Error("Cannot revert: no customers recorded on the journal entry.");
+  }
+  return { path: `${SD}/organization/${encodeURIComponent(organizationId)}/user`, body };
+}
+
+// Reverting an add = remove exactly the customers that were added.
+reverters.register("jsm.addCustomersToOrganization", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const { path, body } = organizationUserCall(entry);
+  await ctx.client.apiTokenJira().delete<unknown>(path, { data: body });
+  return { removed: true, ...body };
+});
+
+// Reverting a remove = re-add exactly the customers that were removed.
+reverters.register("jsm.removeCustomersFromOrganization", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const { path, body } = organizationUserCall(entry);
+  await ctx.client.apiTokenJira().post<unknown>(path, body);
+  return { added: true, ...body };
 });

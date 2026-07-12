@@ -245,14 +245,40 @@ function isDryRunResult(v: unknown): boolean {
   return Boolean(v && typeof v === "object" && (v as { dry_run?: unknown }).dry_run === true);
 }
 
-function sanitizeRequest(args: unknown): Record<string, unknown> {
-  if (!args || typeof args !== "object") return {};
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-    if (/token|secret|password/i.test(k)) out[k] = "[REDACTED]";
-    else out[k] = v;
+// Key names that carry credential material. Matched case-insensitively at every
+// depth — a top-level-only pass leaks anything nested inside a request object
+// (e.g. `{ webhook: { headers: { authorization: "Basic ..." } } }`).
+const SECRET_KEY_RE =
+  /token|secret|password|authorization|api[_-]?key|credential|cookie|private[_-]?key/i;
+// Depth cap so a pathologically nested payload can't blow the stack; anything
+// past it is dropped rather than logged raw, since it could still be a secret.
+const MAX_SANITIZE_DEPTH = 8;
+
+function sanitizeValue(value: unknown, depth: number, ancestors: WeakSet<object>): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (depth >= MAX_SANITIZE_DEPTH) return "[TRUNCATED]";
+  const node = value as object;
+  // Cycle guard: only nodes on the current path count, so a value referenced
+  // twice in a DAG still serializes normally.
+  if (ancestors.has(node)) return "[CIRCULAR]";
+  ancestors.add(node);
+  let out: unknown;
+  if (Array.isArray(value)) {
+    out = value.map((item) => sanitizeValue(item, depth + 1, ancestors));
+  } else {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      obj[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : sanitizeValue(v, depth + 1, ancestors);
+    }
+    out = obj;
   }
+  ancestors.delete(node);
   return out;
+}
+
+function sanitizeRequest(args: unknown): Record<string, unknown> {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return {};
+  return sanitizeValue(args, 0, new WeakSet<object>()) as Record<string, unknown>;
 }
 
 function toolResult(payload: unknown, isError: boolean): CallToolResult {
@@ -356,19 +382,25 @@ function makeClientFactories(opts: {
     return t;
   };
 
-  // For api-token clients whose base URL embeds the cloudId (automation, forms):
-  // require a resolved cloudId, and fail closed when the bound token belongs to
-  // a different site — API tokens are account-global, so on an unpinned
-  // deployment the call would otherwise silently hit the wrong tenant.
-  const requireApiTokenTenant = (): string => {
-    if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
+  // Fail closed when the bound token belongs to a different site than the call
+  // targets — API tokens are account-global, so without this the call would
+  // silently hit the wrong tenant. A binding with no cloud_id is still allowed:
+  // it predates/omits site discovery and is not evidence of another tenant.
+  const assertApiTokenTenant = (expectedCloudId: string | null): void => {
     const boundCloudId = credentials.apiToken?.cloud_id ?? null;
-    if (boundCloudId && boundCloudId !== cloudId) {
+    if (expectedCloudId && boundCloudId && boundCloudId !== expectedCloudId) {
       throw new ToolError(
         "VALIDATION_ERROR",
         "The bound API token belongs to a different cloudId than this call resolves to. Re-bind the token for this site or pin the cloudId.",
       );
     }
+  };
+
+  // For api-token clients whose base URL embeds the cloudId (automation, forms):
+  // require a resolved cloudId, then apply the tenant guard against it.
+  const requireApiTokenTenant = (): string => {
+    if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
+    assertApiTokenTenant(cloudId);
     return cloudId;
   };
 
@@ -414,6 +446,12 @@ function makeClientFactories(opts: {
           "API token is not bound to a known site URL. Re-bind via gojira.bindApiToken with site discovery succeeding.",
         );
       }
+      // The base URL below comes straight from the bound token's site_url, so the
+      // same tenant guard the cloudId-embedding clients get has to apply here too
+      // — otherwise this whole JSM/Confluence surface bypasses site pinning. Tools
+      // in this family may not need a cloudId (needsCloudId:false), in which case
+      // the pinned cloudId is the thing the binding must agree with.
+      assertApiTokenTenant(deps.config.atlassian.pinnedCloudId ?? cloudId);
       return new AtlassianClient({
         baseURL: `https://${site}`,
         auth: { apiToken: t },

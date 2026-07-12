@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
 import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
+import { reverters } from "../../operations/revert.js";
 
 const API = "/rest/api/3";
 
@@ -348,3 +349,53 @@ export const filterDashboardTools = (): AnyToolDef[] => [
     },
   }),
 ];
+
+// Reverting a filter update = PUT the captured `before` back. PUT /filter/{id}
+// requires name AND jql, so both always ride along; the optional fields are
+// restored only when the update touched them (absent from `before` means they
+// were unset, so send the empty value rather than leaving what the update added).
+reverters.register("filters.updateFilter", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: filter id missing from target.");
+  const before = entry.before as {
+    name?: string;
+    jql?: string;
+    description?: string;
+    favourite?: boolean;
+    sharePermissions?: unknown[];
+  } | null;
+  if (!before?.name || !before.jql)
+    throw new Error("Cannot revert: journal entry has no captured `before` filter name/jql.");
+  const body: Record<string, unknown> = { name: before.name, jql: before.jql };
+  if ("description" in entry.request) body.description = before.description ?? "";
+  if ("favourite" in entry.request) body.favourite = before.favourite ?? false;
+  if ("sharePermissions" in entry.request) body.sharePermissions = before.sharePermissions ?? [];
+  const resp = await ctx.client.jira().put<unknown>(`${API}/filter/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
+});
+
+// Reverting a dashboard update = PUT the captured `before` back. PUT
+// /dashboard/{id} requires name, sharePermissions AND editPermissions; description
+// is always sent (defaulting to "") so a description the update ADDED is cleared
+// rather than left in place.
+reverters.register("dashboards.updateDashboard", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: dashboard id missing from target.");
+  const before = entry.before as {
+    name?: string;
+    description?: string;
+    sharePermissions?: unknown[];
+    editPermissions?: unknown[];
+  } | null;
+  if (!before?.name) throw new Error("Cannot revert: journal entry has no captured `before` dashboard name.");
+  const body: Record<string, unknown> = {
+    name: before.name,
+    description: before.description ?? "",
+    sharePermissions: before.sharePermissions ?? [],
+    editPermissions: before.editPermissions ?? [],
+  };
+  const resp = await ctx.client.jira().put<unknown>(`${API}/dashboard/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
+});

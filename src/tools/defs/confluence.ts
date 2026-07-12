@@ -23,14 +23,21 @@ import { reverters } from "../../operations/revert.js";
 const V2 = "/wiki/api/v2";
 const V1 = "/wiki/rest/api";
 
-/** Read a space's current state via v2 (the v1 GET was removed). Returns the first match or null. */
+/**
+ * Read a space's current state via v2 (the v1 GET was removed). Returns the first
+ * match or null.
+ *
+ * `description-format=plain` is not optional: without it v2 omits `description`
+ * entirely, and the update reverter rebuilds its v1 PUT body from this snapshot —
+ * a snapshot with no description could not restore one.
+ */
 async function spaceBeforeSnapshot(
   ctx: import("../types.js").ToolContext,
   spaceKey: string,
 ): Promise<unknown> {
   const resp = await ctx.client
     .apiTokenJira()
-    .get<{ results?: unknown[] }>(`${V2}/spaces?keys=${encodeURIComponent(spaceKey)}`);
+    .get<{ results?: unknown[] }>(`${V2}/spaces?keys=${encodeURIComponent(spaceKey)}&description-format=plain`);
   return resp.data.results?.[0] ?? null;
 }
 
@@ -146,7 +153,8 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "confluence_space", id: input.spaceKey },
         before,
-        request: body,
+        // spaceKey is the path param the reverter needs; `body` alone is only the patch.
+        request: { spaceKey: input.spaceKey, ...body },
         revertible: true,
         revertHint: "PUT the captured `before` payload back.",
         run: async () => {
@@ -298,4 +306,46 @@ reverters.register("confluence.createConfluenceSpace", async (entry, anyCtx) => 
   if (!key) throw new Error("Cannot revert: space key missing.");
   await ctx.client.apiTokenJira().delete<unknown>(`/wiki/rest/api/space/${encodeURIComponent(key)}`);
   return { deleted: key };
+});
+
+// Reverting a space update = PUT the captured `before` back to the v1 endpoint.
+// `before` is the v2 snapshot, so the v1 update body has to be rebuilt from it:
+// v2 nests the description under `description.plain.value`, and v1 wants a full
+// { plain: { value, representation } }. The v1 PUT is a PARTIAL update, so
+// `description` is always sent (defaulting to "") — omitting it would leave a
+// newly-added description in place instead of clearing it.
+reverters.register("confluence.updateConfluenceSpace", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const key = (entry.request as { spaceKey?: string } | null)?.spaceKey ?? (entry.target as { id?: string }).id;
+  if (!key) throw new Error("Cannot revert: space key missing from the journal entry.");
+  const before = entry.before as { name?: string; description?: { plain?: { value?: string } } } | null;
+  // PUT /space/{key} requires `name`, so a snapshot without one is unusable.
+  if (!before?.name) throw new Error("Cannot revert: journal entry has no captured `before` space name.");
+  const body: Record<string, unknown> = {
+    name: before.name,
+    description: { plain: { value: before.description?.plain?.value ?? "", representation: "plain" } },
+  };
+  const resp = await ctx.client.apiTokenJira().put<unknown>(`${V1}/space/${encodeURIComponent(key)}`, body);
+  return { reverted: key, response: resp.data };
+});
+
+// Reverting a restriction replace = PUT the captured `before` restrictions back.
+// `before` is the paginated GET body, whose `results` array is exactly the
+// restriction list the PUT expects. An empty `results` means the content carried
+// no restrictions at all, and DELETE — not a PUT of nothing — is the way back.
+reverters.register("confluence.setContentRestrictions", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: content id missing from the journal entry.");
+  const before = entry.before as { results?: unknown[] } | null;
+  if (!before) throw new Error("Cannot revert: journal entry has no captured `before` restrictions.");
+  const c = ctx.client.apiTokenJira();
+  const path = `${V1}/content/${encodeURIComponent(id)}/restriction`;
+  const results = before.results ?? [];
+  if (results.length === 0) {
+    await c.delete<unknown>(path);
+    return { reverted: id, restrictions: "cleared" };
+  }
+  const resp = await c.put<unknown>(path, { results });
+  return { reverted: id, response: resp.data };
 });

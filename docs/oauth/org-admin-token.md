@@ -35,34 +35,58 @@ pass for an `admin_org` tool to run:
 2. `GOJIRA_ORG_ADMIN_TOKEN` and `GOJIRA_ORG_ID` are both set
    (`config.ts` refuses to start otherwise).
 3. Per-call **caller verification**: the user's accountId must appear in
-   the org's admin roster.
+   `GOJIRA_ORG_ADMIN_ACCOUNT_IDS`, the operator-declared allowlist —
+   which `config.ts` also refuses to start without (exit 1) when org
+   admin is enabled.
 
 ## Caller verification
 
-`src/auth/orgAdminVerifier.ts` checks that the calling user is themselves
-an org admin before running an `admin_org` tool:
+Verification is an **operator-declared allowlist**, not a roster lookup.
+
+Atlassian has no reliable public endpoint that enumerates *only* an org's
+administrators: `GET /admin/v1/orgs/<orgId>/users` returns every managed
+account in the org. Gating on that list would let **any licensed user**
+pass the gate and act with the deployment's global org-admin token —
+privilege escalation. So the set of accounts permitted to invoke
+`admin_org` tools is declared explicitly by the operator instead.
+
+`src/auth/orgAdminVerifier.ts`:
 
 ```
 ctx.accountId
    │
    ▼
-GET org_admin_verified:<accountId> from Redis
-   │
-   ├─ cached "yes" within 5 min → allow
-   ├─ cached "no" within 5 min → deny
-   │
-   ▼ (miss)
-GET /admin/v1/orgs/<orgId>/users (paginated, follows cursors)
-   ├─ caller's accountId appears → SET cache "yes" EX 300 → allow
-   └─ caller's accountId not found after pagination → SET cache "no" EX 300 → deny
+accountId ∈ GOJIRA_ORG_ADMIN_ACCOUNT_IDS ?
+   ├─ yes → allow
+   └─ no  → log warn { accountId, allowlistSize } → deny
 ```
 
-A "no" verdict surfaces as `INSUFFICIENT_PERMISSIONS` with the message
-*"Caller is not an organization admin"*.
+The allowlist is read from config once at construction — no Redis, no
+network call, no cache. An empty allowlist (with org admin enabled)
+denies everyone; startup validation makes that state unreachable anyway.
+It fails closed.
 
-5-minute cache TTL balances tool-call latency against revocation
-freshness; if you remove someone from org admin, they'll keep running
-`admin_org` tools for up to 5 more minutes.
+A denial surfaces as `INSUFFICIENT_PERMISSIONS`:
+
+```json
+{
+  "code": "INSUFFICIENT_PERMISSIONS",
+  "message": "Caller is not an authorized organization admin for this instance.",
+  "details": {
+    "hint": "Add the caller's Atlassian accountId to GOJIRA_ORG_ADMIN_ACCOUNT_IDS."
+  }
+}
+```
+
+If org admin is disabled entirely, the message is instead *"Org admin
+tools are not enabled on this instance"*.
+
+**Granting and revoking access is an operator action, not an Atlassian
+one.** Editing someone's role at admin.atlassian.com does not change what
+this instance permits: add or remove the accountId in
+`GOJIRA_ORG_ADMIN_ACCOUNT_IDS` and restart. Removing an org admin
+upstream while leaving them on the allowlist leaves them able to drive
+the org-admin token — treat the two as one revocation procedure.
 
 ## Recommended deployment shape
 
@@ -76,6 +100,7 @@ Production instance B (org-admin only, separate hostname, separate port)
   GOJIRA_ENABLE_ORG_ADMIN=true
   GOJIRA_ORG_ADMIN_TOKEN=<secret>
   GOJIRA_ORG_ID=<orgId>
+  GOJIRA_ORG_ADMIN_ACCOUNT_IDS=<accountId>[,<accountId>...]
   GOJIRA_ENABLED_GROUPS=utility,admin_org
   GOJIRA_ORG_ADMIN_AUDIT_LOG_TARGET=file:/var/log/gojira/org-admin.log
   (org-admin only; accessed by a small set of admins; separate audit channel)
@@ -127,19 +152,21 @@ Audit record shape includes `org_id` for org-admin calls:
 
 ## Concrete tools
 
-See [org-admin.md](../tools/org-admin.md) for the full list. Highlights:
+See [org-admin.md](../tools/org-admin.md) for all 17. Highlights:
 
 - `orgAdmin.listOrgUsers`, `orgAdmin.getOrgUser`
 - `orgAdmin.provisionUser`, `orgAdmin.deactivateUser`, `orgAdmin.restoreUser`
 - `orgAdmin.addUserToGroup` / `removeUserFromGroup`
 - `orgAdmin.listGroups`, `orgAdmin.createGroup`, `orgAdmin.deleteGroup`
 - `orgAdmin.getOrgPolicies`, `orgAdmin.setOrgPolicy`
-- `orgAdmin.queryAuditLog`, `orgAdmin.listVerifiedDomains`, `orgAdmin.verifyDomain`
-- `orgAdmin.listInstalledApps`, `orgAdmin.removeApp`
-- `orgAdmin.getRovoMcpSettings`, `orgAdmin.setRovoMcpAllowedDomains`,
-  `orgAdmin.setRovoMcpApiTokenAuth`
+- `orgAdmin.queryAuditLog`, `orgAdmin.listManagedAccounts`,
+  `orgAdmin.listVerifiedDomains`
 
-All destructive `admin_org` tools require `commit: true`.
+All destructive `admin_org` tools require `commit: true`. None register a
+reverter — `gojira.revertOperation` is in the `utility` group and is not
+org-admin gated, so an `admin_org` reverter would be a path around this
+gate. Mutating tools journal `revertible: false` plus a `revertHint`
+naming the inverse `admin_org` tool to call by hand.
 
 ## Secret rotation
 

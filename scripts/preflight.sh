@@ -60,7 +60,11 @@ if [[ -n "${TOKEN_ENCRYPTION_KEY:-}" ]]; then
 fi
 
 echo "── Group ↔ scope cross-checks ───────────────────────"
+# "a, b, c" is a perfectly normal way to write the list — strip whitespace so a
+# match still lands. Without this every has() below silently returns false and
+# the whole section passes a misconfigured deployment.
 grp="${GOJIRA_ENABLED_GROUPS:-}"
+grp="${grp//[[:space:]]/}"
 scp="${ATLASSIAN_OAUTH_SCOPES:-}"
 has() { [[ ",$grp," == *",$1,"* ]]; }
 scope_has() { [[ " $scp " == *" $1 "* ]]; }
@@ -83,7 +87,12 @@ echo "── Production posture ────────────────
 warn_if '[[ "${NODE_ENV:-}" != "production" ]]' "NODE_ENV is not 'production' (dev logger may crash in a pruned image)"
 warn_if '[[ "${ALLOWED_ORIGINS:-}" == "*" ]]' "ALLOWED_ORIGINS='*' — set explicit origins for production (disables credentialed CORS)"
 warn_if '[[ "${MCP_SERVER_URL:-}" == http://* ]]' "MCP_SERVER_URL is plain http — front it with TLS (Caddy) for production"
-if [[ "${GOJIRA_ENABLE_ORG_ADMIN:-false}" == "true" ]]; then
+# The server's config parser (src/config.ts) accepts true/1/yes, case-insensitive.
+# Checking only for the literal "true" here would skip these required-var checks
+# on a deployment that the server does treat as org-admin-enabled.
+org_admin="${GOJIRA_ENABLE_ORG_ADMIN:-false}"
+org_admin="$(printf '%s' "${org_admin//[[:space:]]/}" | tr '[:upper:]' '[:lower:]')"
+if [[ "$org_admin" == "true" || "$org_admin" == "1" || "$org_admin" == "yes" ]]; then
   need GOJIRA_ORG_ADMIN_TOKEN "org-admin API token"
   need GOJIRA_ORG_ID "org id"
   need GOJIRA_ORG_ADMIN_ACCOUNT_IDS "comma-separated admin accountIds (fails closed if empty)"

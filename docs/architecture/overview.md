@@ -61,13 +61,13 @@ delegated calls to Atlassian Cloud admin APIs.
 | Token refresher | `src/auth/tokenRefresh.ts` | distributed lock + CAD release |
 | Refresh family | `src/auth/refreshFamily.ts` | RT reuse detection |
 | Token stores | `src/auth/tokenStore.ts` + `apiTokenStore.ts` | encrypted credential persistence |
-| Org-admin verifier | `src/auth/orgAdminVerifier.ts` | admin_org caller verification + cache |
+| Org-admin verifier | `src/auth/orgAdminVerifier.ts` | admin_org caller verification against the `GOJIRA_ORG_ADMIN_ACCOUNT_IDS` allowlist |
 | Rate limiter | `src/middleware/rateLimiter.ts` | token-bucket Lua with NearLimit feedback |
 | Journal | `src/operations/journal.ts` | per-user op log + ZSET index |
 | Revert registry | `src/operations/revert.ts` | reverter functions keyed by tool name |
 | Consent | `src/consent/dryRun.ts` + `jsonPatch.ts` | commit-positive consent + RFC 6902 diffs |
 | Tool registry | `src/tools/registry.ts` + `wrapHandler.ts` | per-call context, operator-floor filter |
-| Tools | `src/tools/defs/*.ts` | 145 tool definitions across 23 permission groups |
+| Tools | `src/tools/defs/*.ts` | 153 tool definitions across 23 permission groups |
 | Server | `src/server.ts` | Express composition, session map, MCP transport |
 | Entry | `src/index.ts` | bootstrap + lifecycle |
 

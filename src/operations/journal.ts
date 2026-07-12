@@ -22,6 +22,9 @@ export interface JournalEntry {
   errorMessage?: string;
 }
 
+/** Hard cap on index members per account (newest kept) — a second bound on top of TTL trimming. */
+const INDEX_MAX_ENTRIES = 1000;
+
 export interface NewOperationArgs {
   accountId: string;
   tool: string;
@@ -48,6 +51,31 @@ export class OperationJournal {
 
   private ttlSeconds(): number {
     return this.ttlDays * 24 * 60 * 60;
+  }
+
+  /**
+   * ioredis `pipeline.exec()` resolves even when individual commands fail — each
+   * command's error is returned in its `[err, result]` tuple, not thrown. Without
+   * this check a failed journal write is silently swallowed and the caller mutates
+   * unjournaled, which is exactly the audit gap the write-ahead record exists to
+   * prevent. `null` means the pipeline itself was aborted.
+   */
+  private assertPipelineOk(rows: [Error | null, unknown][] | null, what: string): void {
+    if (rows === null) throw new Error(`${what}: redis pipeline aborted`);
+    for (const [err] of rows) {
+      if (err) throw new Error(`${what}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Journal entries expire on their own TTL, but the index members pointing at
+   * them never did — so an active account accumulated an ever-growing sorted set
+   * of dead opIds. Trim on every write: drop members older than the TTL, then cap
+   * the length (ZREMRANGEBYRANK is ascending, so this keeps the newest N).
+   */
+  private trimIndex(pipeline: ReturnType<RedisType["pipeline"]>, accountId: string, nowMs: number, ttl: number): void {
+    pipeline.zremrangebyscore(this.indexKey(accountId), "-inf", nowMs - ttl * 1000);
+    pipeline.zremrangebyrank(this.indexKey(accountId), 0, -(INDEX_MAX_ENTRIES + 1));
   }
 
   /**
@@ -78,11 +106,13 @@ export class OperationJournal {
     };
     if (args.revertHint) entry.revertHint = args.revertHint;
     const ttl = this.ttlSeconds();
+    const nowMs = Date.parse(now);
     const pipeline = this.redis.pipeline();
     pipeline.set(this.journalKey(args.accountId, opId), JSON.stringify(entry), "EX", ttl);
-    pipeline.zadd(this.indexKey(args.accountId), Date.parse(now), opId);
+    pipeline.zadd(this.indexKey(args.accountId), nowMs, opId);
+    this.trimIndex(pipeline, args.accountId, nowMs, ttl);
     pipeline.expire(this.indexKey(args.accountId), ttl);
-    await pipeline.exec();
+    this.assertPipelineOk(await pipeline.exec(), "Operation journal write-ahead failed");
     return opId;
   }
 
@@ -117,11 +147,13 @@ export class OperationJournal {
     // surface as a tool failure (that would report a successful write as failed).
     // The pending record from begin() remains as the durable trace.
     try {
+      const completedMs = Date.parse(completedAt);
       const pipeline = this.redis.pipeline();
       pipeline.set(this.journalKey(args.accountId, opId), JSON.stringify(entry), "EX", ttl);
-      pipeline.zadd(this.indexKey(args.accountId), Date.parse(completedAt), opId);
+      pipeline.zadd(this.indexKey(args.accountId), completedMs, opId);
+      this.trimIndex(pipeline, args.accountId, completedMs, ttl);
       pipeline.expire(this.indexKey(args.accountId), ttl);
-      await pipeline.exec();
+      this.assertPipelineOk(await pipeline.exec(), "Operation journal finalize failed");
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err), opId, tool: args.tool, outcome: args.outcome },

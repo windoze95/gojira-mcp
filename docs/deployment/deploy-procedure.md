@@ -27,8 +27,23 @@ In the Atlassian developer console:
    - `read:me`, `read:account`
    - `read:jira-work`, `write:jira-work`
    - `manage:jira-project`, `manage:jira-configuration`
-   - `read:servicedesk-request`, `write:servicedesk-request`,
-     `manage:servicedesk-customer`
+
+   Add these only if you enable the Assets groups (`read_assets` /
+   `write_assets`) — from **Granular scopes** (CMDB), plus the one JSM
+   classic scope the workspace-discovery call needs:
+   - `read:cmdb-object:jira`, `write:cmdb-object:jira`,
+     `read:cmdb-schema:jira`, `write:cmdb-schema:jira`,
+     `read:cmdb-type:jira`, `write:cmdb-type:jira`,
+     `read:cmdb-attribute:jira`, `write:cmdb-attribute:jira`
+   - `read:servicedesk-request` — for
+     `GET /rest/servicedeskapi/assets/workspace`, which every `assets.*`
+     call resolves first
+
+   No OAuth scope covers the JSM-admin (`jsm.*`, `forms.*`),
+   Confluence-admin, or automation tools: they authenticate with the
+   per-user API token bound via `gojira.bindApiToken` (step 7), never
+   with an OAuth bearer. Adding `write:servicedesk-request` /
+   `manage:servicedesk-customer` for them is dead weight.
 4. Save. Copy the **client ID** and **client secret** into your secret
    store.
 
@@ -79,7 +94,7 @@ At minimum:
 ```
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
 ATLASSIAN_PINNED_CLOUD_ID=<cloudId of your prod tenant>
 TOKEN_ENCRYPTION_KEY=<base64 from step 2>
 ALLOWED_ORIGINS=*
@@ -87,6 +102,10 @@ MCP_SERVER_URL=https://gojira.example.com
 REDIS_PASSWORD=<random 32-byte hex>
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
 ```
+
+The CMDB + `read:servicedesk-request` scopes above are there because this
+allowlist enables `read_assets`/`write_assets`. Drop those groups and you can
+drop those scopes with them.
 
 `chmod 600 .env`.
 
@@ -129,7 +148,9 @@ gojira.whoami
 You should see your accountId, the deployment's pinned cloudId, and the
 list of enabled groups.
 
-For JSM/Assets tools, also call:
+For the JSM-admin (`jsm.*`, `forms.*`), Confluence-admin, and automation
+tools — the ones that authenticate with the per-user API token rather
+than OAuth — each user also calls:
 
 ```
 gojira.bindApiToken
@@ -137,6 +158,12 @@ gojira.bindApiToken
   token=<generate at id.atlassian.com>
   site_url=<your>.atlassian.net
 ```
+
+This validates the credential against `/rest/api/3/myself` on that site
+and stores it encrypted; it discovers nothing else. Assets tools do
+**not** use the bound token — they run on OAuth (CMDB scopes +
+`read:servicedesk-request`). For automation, the token's account must be
+a **Jira administrator** or every automation call 403s.
 
 ## Step 8 — Rotation cadence
 
@@ -148,17 +175,23 @@ gojira.bindApiToken
 
 ## Step 9 — Expand the surface
 
-To add tools that need additional Atlassian scopes (e.g., schemes,
-workflows, Confluence admin):
+Only the OAuth-authed groups need scopes at all. Adding **Assets** is the
+one expansion that widens `ATLASSIAN_OAUTH_SCOPES`:
 
 ```diff
-- ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer
-+ ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:confluence-space.summary write:confluence-space read:confluence-content.all write:confluence-content
+- ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration
++ ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
 ```
 
 Make sure those scopes are declared on the Atlassian app, then restart.
 Existing bearers stay valid; their next upstream call uses the new
 consent set after refresh. New bearers consent fresh.
+
+Adding **Confluence admin**, **JSM admin**, or **automation** needs *no*
+scope change — those tools take the per-user API token, so the only
+prerequisite is that each user has run `gojira.bindApiToken` (step 7).
+Confluence OAuth scopes (`read:confluence-*`, `write:confluence-*`) do
+nothing for this deployment; leave them off.
 
 To enable additional permission groups (e.g., add `delete_projects` to
 the allowlist):
