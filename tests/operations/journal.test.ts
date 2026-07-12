@@ -73,6 +73,39 @@ describe("OperationJournal (D2)", () => {
     expect(ids[0]).toBeGreaterThan(ids[2]);
   });
 
+  it("write-ahead: begin() persists a pending record with before-state before the mutation", async () => {
+    const opId = await journal.begin({
+      accountId,
+      tool: "deleteProject",
+      cloudId: "cloud-1",
+      target: { kind: "project", key: "ABC" },
+      before: { key: "ABC", name: "Alpha" },
+      request: { key: "ABC" },
+      revertible: true,
+    });
+    // Durable immediately — a crash before complete() leaves this trace.
+    const pending = await journal.get(accountId, opId);
+    expect(pending?.outcome).toBe("pending");
+    expect(pending?.before).toEqual({ key: "ABC", name: "Alpha" });
+    expect(pending?.revertible).toBe(false);
+  });
+
+  it("correlates the journal opId with a caller-supplied operation id", async () => {
+    const opId = await journal.begin(
+      {
+        accountId,
+        tool: "noop",
+        cloudId: null,
+        target: { kind: "noop" },
+        before: null,
+        request: {},
+        revertible: false,
+      },
+      "audit-op-123",
+    );
+    expect(opId).toBe("audit-op-123");
+  });
+
   it("marks failed ops as non-revertible regardless of input", async () => {
     const opId = await journal.begin({
       accountId,

@@ -15,6 +15,7 @@ import {
   AccessDeniedError,
   InvalidClientError,
   InvalidGrantError,
+  InvalidTokenError,
   ServerError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
@@ -96,6 +97,7 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     mcpAccess: (token: string) => `mcp_token:${token}`,
     mcpRefresh: (token: string) => `mcp_refresh:${token}`,
     rtFamilyIndex: (token: string) => `rt_family:${token}`,
+    familyAccount: (familyId: string) => `rt_family_account:${familyId}`,
   };
 
   // -------- /authorize handler --------
@@ -163,8 +165,7 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     _codeVerifier?: string,
     redirectUri?: string,
   ): Promise<OAuthTokens> {
-    const blob = await (this.redis as unknown as { call: (...a: unknown[]) => Promise<string | null> })
-      .call("GETDEL", GojiraOAuthProvider.keys.authCode(authorizationCode));
+    const blob = await this.getdel(GojiraOAuthProvider.keys.authCode(authorizationCode));
     if (!blob) {
       throw new InvalidGrantError("authorization code is invalid or already used");
     }
@@ -190,16 +191,24 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     _scopes?: string[],
   ): Promise<OAuthTokens> {
     const rtKey = GojiraOAuthProvider.keys.mcpRefresh(refreshToken);
-    const stored = await this.redis.get(rtKey);
+    // Atomically claim the RT: only one caller can win. A concurrent replay
+    // (attacker racing the legitimate holder) loses the GETDEL and falls into
+    // the reuse-detection branch — plain GET would let both requests succeed
+    // and silently leave two live RTs in the family, defeating the alarm.
+    const stored = await this.getdel(rtKey);
     if (!stored) {
       const fIdx = await this.redis.get(GojiraOAuthProvider.keys.rtFamilyIndex(refreshToken));
       if (fIdx) {
-        const familyId = fIdx;
+        const familyId = this.parseFamilyIndex(fIdx);
         const hasOthers = await this.family.hasOtherLiveRefreshTokens(familyId);
         if (hasOthers) {
+          const accountId = await this.redis.get(
+            GojiraOAuthProvider.keys.familyAccount(familyId),
+          );
           await this.family.destroyFamily(familyId, {
             reason:
               "Refresh token reuse: presented previously-rotated RT while family still has live members.",
+            accountId: accountId ?? undefined,
             webhookUrl: this.config.refreshReuseAlertWebhook,
           });
         }
@@ -211,11 +220,12 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
       throw new InvalidClientError("refresh token was issued to a different client");
     }
 
+    // RT is already consumed by the GETDEL above; drop it from the family set.
+    await this.family.removeRefreshToken(rt.familyId, refreshToken);
+
     const upstreamKey = `token:${rt.accountId}`;
     const upstreamExists = await this.redis.exists(upstreamKey);
     if (!upstreamExists) {
-      await this.redis.del(rtKey);
-      await this.family.removeRefreshToken(rt.familyId, refreshToken);
       throw new InvalidGrantError("upstream credential is no longer present; re-authenticate");
     }
 
@@ -226,20 +236,20 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
       generation: rt.generation + 1,
     });
 
-    await this.redis.del(rtKey);
-    await this.family.removeRefreshToken(rt.familyId, refreshToken);
-
     return minted;
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const blob = await this.redis.get(GojiraOAuthProvider.keys.mcpAccess(token));
-    if (!blob) throw new InvalidGrantError("access token is invalid or expired");
+    // Throw InvalidTokenError (not InvalidGrantError) so the bearer-auth
+    // middleware answers with 401 + WWW-Authenticate — the signal MCP clients
+    // use to refresh. A 400 leaves them stuck without re-authenticating.
+    if (!blob) throw new InvalidTokenError("access token is invalid or expired");
     const at = JSON.parse(blob) as StoredAccessToken;
     const nowSec = Math.floor(Date.now() / 1000);
     if (at.expiresAt <= nowSec) {
       await this.redis.del(GojiraOAuthProvider.keys.mcpAccess(token));
-      throw new InvalidGrantError("access token has expired");
+      throw new InvalidTokenError("access token has expired");
     }
     return {
       token,
@@ -286,12 +296,31 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
   }
 
   async consumeAtlassianState(state: string): Promise<{ pendingAuthId: string } | null> {
-    const raw = await (this.redis as unknown as { call: (...a: unknown[]) => Promise<string | null> }).call(
-      "GETDEL",
-      GojiraOAuthProvider.keys.atlassianState(state),
-    );
+    const raw = await this.getdel(GojiraOAuthProvider.keys.atlassianState(state));
     if (!raw) return null;
     return JSON.parse(raw) as { pendingAuthId: string };
+  }
+
+  /** Atomic read-and-delete (Redis GETDEL). Used for one-time-use artifacts (codes, state, RTs). */
+  private getdel(key: string): Promise<string | null> {
+    return this.redis.getdel(key);
+  }
+
+  /**
+   * The rt_family index historically stored the bare familyId string; we keep
+   * that format so existing tokens keep working. Parse defensively in case a
+   * future format is introduced.
+   */
+  private parseFamilyIndex(raw: string): string {
+    if (raw.startsWith("{")) {
+      try {
+        const o = JSON.parse(raw) as { familyId?: string };
+        if (o.familyId) return o.familyId;
+      } catch {
+        /* fall through */
+      }
+    }
+    return raw;
   }
 
   async getPendingAuth(id: string): Promise<PendingAuth | null> {
@@ -336,6 +365,14 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     pipeline.set(
       GojiraOAuthProvider.keys.rtFamilyIndex(refreshToken),
       familyId,
+      "EX",
+      RT_FAMILY_INDEX_TTL,
+    );
+    // Family→account map, so reuse detection can attribute the incident to a
+    // user even after the presented RT (and its blob) is gone.
+    pipeline.set(
+      GojiraOAuthProvider.keys.familyAccount(familyId),
+      opts.accountId,
       "EX",
       RT_FAMILY_INDEX_TTL,
     );

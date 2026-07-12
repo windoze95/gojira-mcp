@@ -48,14 +48,42 @@ async function main(): Promise<void> {
     );
   });
 
+  let shuttingDown = false;
+  const SHUTDOWN_HARD_TIMEOUT_MS = 15_000;
   const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info({ signal }, "shutdown initiated");
-    server.close(() => logger.info("HTTP listener closed"));
+
+    // Backstop: never hang forever waiting on a stuck connection or stream.
+    const hardTimer = setTimeout(() => {
+      logger.warn("graceful shutdown timed out; forcing exit");
+      process.exit(1);
+    }, SHUTDOWN_HARD_TIMEOUT_MS);
+    hardTimer.unref?.();
+
+    // 1. Stop accepting new connections.
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    logger.info("HTTP listener closed");
+
+    // 2. Close MCP sessions/transports so in-flight streams and their
+    //    journal/audit writes finish rather than being killed mid-write.
+    try {
+      const gojiraShutdown = app.locals.gojiraShutdown as undefined | (() => Promise<void>);
+      if (gojiraShutdown) await gojiraShutdown();
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "session shutdown failed");
+    }
+
+    // 3. Close Redis last.
     try {
       await redis.quit();
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : String(err) }, "redis.quit failed");
     }
+
+    clearTimeout(hardTimer);
+    logger.info("shutdown complete");
     process.exit(0);
   };
 

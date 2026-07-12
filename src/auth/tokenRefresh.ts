@@ -8,7 +8,13 @@ import { AuthExpiredError, AuthRequiredError } from "../middleware/errorHandler.
 
 /** Refresh if the access token expires within this many ms. */
 const REFRESH_GUARD_MS = 60_000;
-const LOCK_TTL_SECONDS = 10;
+// Must exceed the upstream refresh HTTP timeout (15s in identity.ts) plus
+// margin, or the lock can expire mid-refresh and let a second refresher burn
+// the (single-use) Atlassian refresh grant.
+const LOCK_TTL_SECONDS = 30;
+/** How long a contending caller waits for the lock holder to publish a fresh token. */
+const CONTENTION_MAX_WAIT_MS = 20_000;
+const CONTENTION_POLL_MS = 500;
 
 /**
  * Lua compare-and-delete: only release the lock if we still own it.
@@ -54,11 +60,20 @@ export class TokenRefresher {
     const acquired = await this.redis.set(lockKey, lockToken, "EX", LOCK_TTL_SECONDS, "NX");
 
     if (acquired !== "OK") {
-      // Wait briefly for the other holder to finish, then re-read.
-      await sleep(1000);
-      const fresh = await this.tokens.get(accountId);
-      if (!fresh) throw new AuthRequiredError("Upstream credential disappeared during refresh");
-      if (fresh.expires_at - Date.now() > REFRESH_GUARD_MS) return fresh;
+      // Another caller holds the lock. Poll until it publishes a fresh token,
+      // the lock is released (holder finished or died — then we retry), or we
+      // exhaust the wait budget. A single short sleep + throw (the old behavior)
+      // spuriously forced re-auth on every parallel tool call at refresh time.
+      const deadline = Date.now() + CONTENTION_MAX_WAIT_MS;
+      while (Date.now() < deadline) {
+        await sleep(CONTENTION_POLL_MS);
+        const fresh = await this.tokens.get(accountId);
+        if (!fresh) throw new AuthRequiredError("Upstream credential disappeared during refresh");
+        if (fresh.expires_at - Date.now() > REFRESH_GUARD_MS) return fresh;
+        // Holder gone without publishing a fresh token → attempt to take over.
+        const lockStillHeld = await this.redis.exists(lockKey);
+        if (!lockStillHeld) return this.ensureFreshToken(accountId);
+      }
       throw new AuthExpiredError("Token refresh contention timed out");
     }
 

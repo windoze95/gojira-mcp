@@ -24,15 +24,32 @@ interface SessionEntry {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
   createdAt: number;
+  lastSeenAt: number;
 }
+
+/** Hard cap on concurrent MCP sessions; the oldest-idle is evicted past this. */
+const MAX_SESSIONS = 10_000;
+/** Sessions idle longer than this are swept and closed. */
+const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
+const SESSION_SWEEP_INTERVAL_MS = 60 * 1000;
 
 export function createApp(config: AppConfig, redis: RedisType): Express {
   const app = express();
+
+  // Trust the immediate reverse proxy (Caddy/TLS terminator) so req.ip reflects
+  // the real client. Without this, express-rate-limit in the OAuth router keys
+  // every request to the proxy's IP — one shared bucket that a single client
+  // can exhaust, DoS-ing the auth flow for everyone.
+  app.set("trust proxy", 1);
 
   // 1. helmet — secure default headers.
   app.use(helmet());
 
   // 2. CORS — allowlist driven by ALLOWED_ORIGINS, supports '*'.
+  // Credentials are only enabled for an explicit origin allowlist: reflecting an
+  // arbitrary origin *with* credentials is an unsafe combination. MCP auth is
+  // bearer-based (Authorization header), so wildcard deployments don't need it.
+  const allowCredentials = !config.allowedOrigins.includes("*");
   app.use(
     cors({
       origin: (origin, cb) => {
@@ -41,7 +58,9 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
         if (config.allowedOrigins.includes(origin)) return cb(null, true);
         return cb(null, false);
       },
-      credentials: true,
+      credentials: allowCredentials,
+      allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id", "MCP-Protocol-Version"],
+      exposedHeaders: ["Mcp-Session-Id"],
     }),
   );
 
@@ -138,9 +157,51 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
     };
     await server.connect(transport);
 
-    const entry: SessionEntry = { transport, server, createdAt: Date.now() };
+    // Evict the oldest-idle session if we're at capacity (bounds memory against
+    // clients that open sessions and never DELETE them).
+    if (sessions.size >= MAX_SESSIONS) {
+      let oldestId: string | null = null;
+      let oldestSeen = Infinity;
+      for (const [id, e] of sessions) {
+        if (e.lastSeenAt < oldestSeen) {
+          oldestSeen = e.lastSeenAt;
+          oldestId = id;
+        }
+      }
+      if (oldestId) {
+        const victim = sessions.get(oldestId);
+        sessions.delete(oldestId);
+        void victim?.transport.close().catch(() => undefined);
+        logger.warn({ sessionId: oldestId }, "Session cap reached; evicted oldest-idle session");
+      }
+    }
+
+    const entry: SessionEntry = { transport, server, createdAt: Date.now(), lastSeenAt: Date.now() };
     return entry;
   }
+
+  // Periodically close sessions that have gone idle. unref() so it never keeps
+  // the process alive on its own.
+  const sweeper = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of sessions) {
+      if (now - entry.lastSeenAt > SESSION_IDLE_TTL_MS) {
+        sessions.delete(id);
+        void entry.transport.close().catch(() => undefined);
+        logger.info({ sessionId: id }, "Swept idle MCP session");
+      }
+    }
+  }, SESSION_SWEEP_INTERVAL_MS);
+  sweeper.unref?.();
+
+  // Exposed for graceful shutdown (index.ts): stop the sweeper and close every
+  // live transport so in-flight streams end cleanly.
+  app.locals.gojiraShutdown = async (): Promise<void> => {
+    clearInterval(sweeper);
+    const entries = [...sessions.values()];
+    sessions.clear();
+    await Promise.allSettled(entries.map((e) => e.transport.close()));
+  };
 
   // 8. /mcp transport handlers — bearer-protected.
   const bearer = requireBearerAuth({ verifier: oauthProvider });
@@ -148,12 +209,20 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
   app.post("/mcp", bearer, async (req, res, next) => {
     try {
       const sid = lookupSessionId(req);
-      if (sid && sessions.has(sid)) {
-        const entry = sessions.get(sid)!;
+      if (sid) {
+        // A session id was supplied. If we don't know it (stale/expired), reply
+        // 404 so the client re-initializes — do NOT silently spin up a throwaway
+        // session, which drops the client's state and misreports as a 400.
+        const entry = sessions.get(sid);
+        if (!entry) {
+          res.status(404).json({ error: "session not found" });
+          return;
+        }
+        entry.lastSeenAt = Date.now();
         await entry.transport.handleRequest(req, res, req.body);
         return;
       }
-      // New session
+      // No session id → treat as an initialize request; create a new session.
       const entry = await createMcpSession(req, res);
       await entry.transport.handleRequest(req, res, req.body);
     } catch (err) {
@@ -164,11 +233,13 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
   app.get("/mcp", bearer, async (req, res, next) => {
     try {
       const sid = lookupSessionId(req);
-      if (!sid || !sessions.has(sid)) {
+      const entry = sid ? sessions.get(sid) : undefined;
+      if (!entry) {
         res.status(404).json({ error: "session not found" });
         return;
       }
-      await sessions.get(sid)!.transport.handleRequest(req, res);
+      entry.lastSeenAt = Date.now();
+      await entry.transport.handleRequest(req, res);
     } catch (err) {
       next(err);
     }

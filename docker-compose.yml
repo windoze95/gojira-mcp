@@ -6,7 +6,10 @@ services:
     container_name: gojira-mcp
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      # Bind to loopback only. This is the plain-HTTP OAuth/MCP listener; expose
+      # it publicly through the Caddy TLS overlay, not directly. (The Caddy
+      # overlay resets this and reaches the app over the internal network.)
+      - "127.0.0.1:8081:8081"
     environment:
       MCP_PORT: 8081
       MCP_SERVER_URL: "${MCP_SERVER_URL:-https://gojira.example.com}"
@@ -27,14 +30,23 @@ services:
       - "--requirepass"
       - "${REDIS_PASSWORD}"
       - "--maxmemory"
-      - "256mb"
+      - "512mb"
+      # noeviction, NOT allkeys-lru: this store holds encrypted credentials, API
+      # token bindings, and the operation journal. Under memory pressure, fail
+      # writes loudly rather than silently evicting tokens/audit trail. Size
+      # --maxmemory to the workload; alert on used_memory.
       - "--maxmemory-policy"
-      - "allkeys-lru"
+      - "noeviction"
       - "--appendonly"
       - "yes"
+    environment:
+      # Make the password available inside the container for the healthcheck.
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
     expose: ["6379"]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "$$REDIS_PASSWORD", "PING"]
+      # CMD-SHELL so $REDIS_PASSWORD expands; exec-form CMD passes it literally
+      # and the AUTH'd PING then fails, wedging depends_on: service_healthy.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5

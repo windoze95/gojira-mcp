@@ -24,16 +24,21 @@ export class RedisClientsStore {
   ): Promise<OAuthClientInformationFull> {
     const clientId = randomUUID();
     const issued = Math.floor(Date.now() / 1000);
-    // We always issue a confidential client_secret; clients that don't use it
-    // are free to ignore it. Public clients (no secret) may be added later
-    // if the SDK exposes a discriminator at registration time.
-    const clientSecret = randomBytes(32).toString("hex");
+    // Honor the client's declared auth method. Public clients register with
+    // `token_endpoint_auth_method: "none"` and authenticate via PKCE only —
+    // forcing a client_secret on them breaks their token exchange (they never
+    // send one, and the SDK then rejects the request as a client mismatch).
+    const isPublic = client.token_endpoint_auth_method === "none";
     const full: OAuthClientInformationFull = {
       ...client,
       client_id: clientId,
       client_id_issued_at: issued,
-      client_secret: clientSecret,
-      client_secret_expires_at: issued + CLIENT_TTL_SECONDS,
+      ...(isPublic
+        ? {}
+        : {
+            client_secret: randomBytes(32).toString("hex"),
+            client_secret_expires_at: issued + CLIENT_TTL_SECONDS,
+          }),
     };
     await this.redis.set(this.k(clientId), JSON.stringify(full), "EX", CLIENT_TTL_SECONDS);
     return full;

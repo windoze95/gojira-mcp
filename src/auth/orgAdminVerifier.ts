@@ -1,98 +1,48 @@
-import axios from "axios";
 import type { RedisType } from "../redis/client.js";
 import type { AppConfig } from "../config.js";
-import { adminBase } from "../atlassian/client.js";
 import { logger } from "../utils/logger.js";
 import { InsufficientPermissionsError } from "../middleware/errorHandler.js";
 
 /**
- * admin_org caller verification. Every admin_org tool call first verifies the
- * caller's accountId appears in /admin/v1/orgs/<orgId>/users?role=admin.
+ * admin_org caller verification.
  *
- * Cached 5 min per accountId.
+ * Security note: Atlassian's org API has no reliable public endpoint that
+ * enumerates *only* organization administrators — `GET /admin/v1/orgs/<orgId>/users`
+ * returns every managed account in the org. Verifying membership against that
+ * list would let any licensed user pass the gate and act with the deployment's
+ * global org-admin token (privilege escalation).
+ *
+ * Instead, the set of accounts permitted to invoke admin_org tools is declared
+ * explicitly by the operator via `GOJIRA_ORG_ADMIN_ACCOUNT_IDS`. Only accountIds
+ * on that allowlist pass. An empty allowlist (with org admin enabled) denies
+ * everyone — fail closed. Startup config validation already requires the
+ * allowlist to be non-empty when `GOJIRA_ENABLE_ORG_ADMIN=true`.
  */
-const CACHE_TTL_SECONDS = 5 * 60;
-
 export class OrgAdminVerifier {
-  constructor(
-    private readonly redis: RedisType,
-    private readonly config: AppConfig,
-  ) {}
+  private readonly allow: ReadonlySet<string>;
 
-  private cacheKey(accountId: string): string {
-    return `org_admin_verified:${accountId}`;
+  constructor(
+    _redis: RedisType,
+    private readonly config: AppConfig,
+  ) {
+    this.allow = new Set(config.orgAdmin.adminAccountIds);
   }
 
   async verify(accountId: string): Promise<void> {
     if (!this.config.orgAdmin.enabled) {
       throw new InsufficientPermissionsError("Org admin tools are not enabled on this instance");
     }
-    const cached = await this.redis.get(this.cacheKey(accountId));
-    if (cached === "yes") return;
-    if (cached === "no") {
-      throw new InsufficientPermissionsError("Caller is not an organization admin");
+    if (!this.allow.has(accountId)) {
+      logger.warn(
+        { accountId, allowlistSize: this.allow.size },
+        "Org-admin gate denied: caller not on GOJIRA_ORG_ADMIN_ACCOUNT_IDS allowlist",
+      );
+      throw new InsufficientPermissionsError(
+        "Caller is not an authorized organization admin for this instance.",
+        {
+          hint: "Add the caller's Atlassian accountId to GOJIRA_ORG_ADMIN_ACCOUNT_IDS.",
+        },
+      );
     }
-    const ok = await this.probe(accountId);
-    await this.redis.set(this.cacheKey(accountId), ok ? "yes" : "no", "EX", CACHE_TTL_SECONDS);
-    if (!ok) throw new InsufficientPermissionsError("Caller is not an organization admin");
-  }
-
-  /**
-   * Probes admin.atlassian.com for the org's admin roster. The endpoint is
-   * paginated; we walk pages until we find the caller or exhaust the list.
-   */
-  private async probe(accountId: string): Promise<boolean> {
-    const orgId = this.config.orgAdmin.orgId;
-    const token = this.config.orgAdmin.token;
-    if (!orgId || !token) return false;
-    let cursor: string | undefined = undefined;
-    let safety = 50; // hard upper bound on pages
-    while (safety-- > 0) {
-      const url: string = cursor
-        ? `${adminBase()}/orgs/${orgId}/users?cursor=${encodeURIComponent(cursor)}`
-        : `${adminBase()}/orgs/${orgId}/users`;
-      try {
-        const resp = await axios.get<{
-          data: Array<{ account_id: string; account_type?: string; account_status?: string }>;
-          links?: { next?: string };
-          meta?: { next_cursor?: string };
-        }>(url, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/json",
-          },
-          timeout: 15_000,
-        });
-        const body = resp.data;
-        const users = body.data ?? [];
-        for (const u of users) {
-          // org-admin roster endpoint returns roles per user in some shapes;
-          // for the basic /users endpoint we trust enumeration as the org's
-          // managed accounts. Fall back to a dedicated /admins call if needed.
-          if (u.account_id === accountId) return true;
-        }
-        cursor = body.meta?.next_cursor;
-        if (!cursor && body.links?.next) {
-          // Parse cursor from links.next if meta absent.
-          try {
-            const u = new URL(body.links.next, adminBase());
-            cursor = u.searchParams.get("cursor") ?? undefined;
-          } catch {
-            cursor = undefined;
-          }
-        }
-        if (!cursor) return false;
-      } catch (err) {
-        logger.warn(
-          {
-            err: err instanceof Error ? err.message : String(err),
-            accountId,
-          },
-          "Org admin verification probe failed",
-        );
-        return false;
-      }
-    }
-    return false;
   }
 }

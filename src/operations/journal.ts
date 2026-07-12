@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { RedisType } from "../redis/client.js";
+import { logger } from "../utils/logger.js";
 
-export type JournalOutcome = "success" | "failure" | "dry_run";
+export type JournalOutcome = "success" | "failure" | "dry_run" | "pending";
 
 export interface JournalEntry {
   opId: string;
@@ -50,19 +51,48 @@ export class OperationJournal {
   }
 
   /**
-   * Captures before-state ahead of a mutation. Returns an `opId` the caller
-   * must pass back to complete() once the mutation succeeds (or fails).
-   * We don't persist until complete() so a thrown error before the mutation
-   * doesn't litter the journal with half-formed records.
+   * Write-ahead: persists a `pending` record capturing before-state BEFORE the
+   * mutation runs, and returns its `opId`. If the process crashes or Redis
+   * fails between the mutation and complete(), the pending record survives as
+   * evidence the operation may have executed — rather than a silent gap.
+   *
+   * A Redis failure here throws (the caller aborts before mutating), which is
+   * correct: no unrecorded mutation. Pass `opId` to correlate with the audit
+   * trail's operation_id.
    */
-  async begin(_args: NewOperationArgs): Promise<string> {
-    return randomUUID();
+  async begin(args: NewOperationArgs, opId: string = randomUUID()): Promise<string> {
+    const now = new Date().toISOString();
+    const entry: JournalEntry = {
+      opId,
+      accountId: args.accountId,
+      tool: args.tool,
+      cloudId: args.cloudId,
+      target: args.target,
+      before: args.before,
+      after: null,
+      request: args.request,
+      requestedAt: now,
+      completedAt: now,
+      outcome: "pending",
+      revertible: false,
+    };
+    if (args.revertHint) entry.revertHint = args.revertHint;
+    const ttl = this.ttlSeconds();
+    const pipeline = this.redis.pipeline();
+    pipeline.set(this.journalKey(args.accountId, opId), JSON.stringify(entry), "EX", ttl);
+    pipeline.zadd(this.indexKey(args.accountId), Date.parse(now), opId);
+    pipeline.expire(this.indexKey(args.accountId), ttl);
+    await pipeline.exec();
+    return opId;
   }
 
   async complete(
     opId: string,
     args: NewOperationArgs & { after: unknown; outcome: JournalOutcome; error?: { code: string; message: string } },
   ): Promise<JournalEntry> {
+    const existing = await this.get(args.accountId, opId).catch(() => null);
+    const requestedAt = existing?.requestedAt ?? new Date().toISOString();
+    const completedAt = new Date().toISOString();
     const entry: JournalEntry = {
       opId,
       accountId: args.accountId,
@@ -72,8 +102,8 @@ export class OperationJournal {
       before: args.before,
       after: args.after,
       request: args.request,
-      requestedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
+      requestedAt,
+      completedAt,
       outcome: args.outcome,
       revertible: args.revertible && args.outcome === "success",
     };
@@ -83,12 +113,21 @@ export class OperationJournal {
       entry.errorMessage = args.error.message;
     }
     const ttl = this.ttlSeconds();
-    const pipeline = this.redis.pipeline();
-    pipeline.set(this.journalKey(args.accountId, opId), JSON.stringify(entry), "EX", ttl);
-    const score = Date.parse(entry.completedAt);
-    pipeline.zadd(this.indexKey(args.accountId), score, opId);
-    pipeline.expire(this.indexKey(args.accountId), ttl);
-    await pipeline.exec();
+    // Best-effort: the mutation already happened. A Redis failure here must NOT
+    // surface as a tool failure (that would report a successful write as failed).
+    // The pending record from begin() remains as the durable trace.
+    try {
+      const pipeline = this.redis.pipeline();
+      pipeline.set(this.journalKey(args.accountId, opId), JSON.stringify(entry), "EX", ttl);
+      pipeline.zadd(this.indexKey(args.accountId), Date.parse(completedAt), opId);
+      pipeline.expire(this.indexKey(args.accountId), ttl);
+      await pipeline.exec();
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err), opId, tool: args.tool, outcome: args.outcome },
+        "Failed to finalize operation journal entry (mutation outcome stands; pending record retained)",
+      );
+    }
     return entry;
   }
 
