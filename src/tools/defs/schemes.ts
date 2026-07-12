@@ -112,8 +112,10 @@ export const schemeTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const c = ctx.client.jira();
       const before = await c.get<unknown>(`${PERMISSION_SCHEME_PATH}/${encodeURIComponent(input.schemeId)}?expand=all`);
-      const body: Record<string, unknown> = {};
-      if (input.name !== undefined) body.name = input.name;
+      const prev = before.data as { name?: string };
+      // PUT /permissionscheme/{id} requires `name`. A description- or
+      // permissions-only update must still carry the existing name or it 400s.
+      const body: Record<string, unknown> = { name: input.name ?? prev.name };
       if (input.description !== undefined) body.description = input.description;
       if (input.permissions !== undefined) body.permissions = input.permissions;
       const after = { ...(before.data as object), ...body };

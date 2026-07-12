@@ -11,33 +11,38 @@ export const deleteProjectTools = (): AnyToolDef[] => [
   defineTool({
     name: "projects.deleteJiraProject",
     description:
-      "Permanently delete a Jira project. **Irreversible.** Re-invoke with `commit: true` after reviewing the dry-run.",
+      "Delete a Jira project. Defaults to move-to-trash (recoverable for ~60 days); pass `permanent: true` " +
+      "to hard-delete with no undo. **Re-invoke with `commit: true` after reviewing the dry-run.**",
     group: "delete_projects",
     authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
       project: z.string().min(1).describe("Project key or numeric id."),
-      enableUndo: z
+      permanent: z
         .boolean()
         .default(false)
         .optional()
         .describe(
-          "If true, uses the move-to-trash endpoint (recoverable for 60 days). Default false = permanent delete.",
+          "false (default) = move to trash, restorable for ~60 days. true = permanent hard-delete, NO undo.",
         ),
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
       const c = ctx.client.jira();
+      // enableUndo defaults to TRUE on the DELETE endpoint, so we ALWAYS send it
+      // explicitly to match the caller's intent. permanent=true => enableUndo=false.
+      const permanent = input.permanent === true;
+      const enableUndo = !permanent;
       const before = await c.get<unknown>(`/rest/api/3/project/${encodeURIComponent(input.project)}`);
       if (input.commit !== true) {
         return buildDeleteDryRun({
           tool: "projects.deleteJiraProject",
           target: { kind: "jira_project", id: input.project },
           before: before.data,
-          message: input.enableUndo
-            ? "Would TRASH the project (60-day undo window). Re-invoke with commit:true to apply."
-            : "Would PERMANENTLY DELETE the project. Re-invoke with commit:true to apply. NO UNDO.",
+          message: permanent
+            ? "Would PERMANENTLY DELETE the project. Re-invoke with commit:true to apply. NO UNDO."
+            : "Would move the project to TRASH (restorable for ~60 days). Re-invoke with commit:true to apply.",
         });
       }
       const entry = await ctx.journalOp({
@@ -46,15 +51,15 @@ export const deleteProjectTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "jira_project", id: input.project },
         before: before.data,
-        request: { project: input.project, enableUndo: input.enableUndo } as Record<string, unknown>,
-        revertible: input.enableUndo ?? false,
-        revertHint: input.enableUndo
-          ? "POST /rest/api/3/project/{key}/restore within the 60-day window."
+        request: { project: input.project, permanent } as Record<string, unknown>,
+        revertible: enableUndo,
+        revertHint: enableUndo
+          ? "POST /rest/api/3/project/{key}/restore within the ~60-day trash window."
           : "Permanent deletion has no programmatic undo. Restore from backup if available.",
         run: async () => {
-          const path = `/rest/api/3/project/${encodeURIComponent(input.project)}${input.enableUndo ? "?enableUndo=true" : ""}`;
+          const path = `/rest/api/3/project/${encodeURIComponent(input.project)}?enableUndo=${enableUndo}`;
           await c.delete<unknown>(path);
-          return { deleted: input.project, undo: input.enableUndo === true };
+          return { deleted: input.project, permanent, restorable: enableUndo };
         },
       });
       return { ok: true, journal_id: entry.opId };
