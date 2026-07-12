@@ -85,14 +85,13 @@ export const schemeTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the created permission scheme.",
+        deriveTargetId: (after) => (after as { id?: string | number })?.id?.toString(),
         run: async () => {
           const resp = await ctx.client.jira().post<{ id: string }>(PERMISSION_SCHEME_PATH, body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string };
-      if (created?.id) entry.target = { ...entry.target, id: created.id };
-      return { ok: true, journal_id: entry.opId, scheme: created };
+      return { ok: true, journal_id: entry.opId, scheme: entry.after };
     },
   }),
   defineTool({
@@ -283,14 +282,13 @@ export const schemeTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the created notification scheme.",
+        deriveTargetId: (after) => (after as { id?: string | number })?.id?.toString(),
         run: async () => {
           const resp = await ctx.client.jira().post<{ id: string }>(NOTIFICATION_SCHEME_PATH, body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string };
-      if (created?.id) entry.target = { ...entry.target, id: created.id };
-      return { ok: true, journal_id: entry.opId, scheme: created };
+      return { ok: true, journal_id: entry.opId, scheme: entry.after };
     },
   }),
   defineTool({

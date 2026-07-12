@@ -155,6 +155,11 @@ export const workflowTools = (): AnyToolDef[] => [
         request: { workflows: names } as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the created workflow(s) by entity id.",
+        deriveTargetId: (after) => {
+          const ws = (after as { workflows?: Array<{ id?: string }> })?.workflows ?? [];
+          const ids = ws.map((w) => w.id).filter(Boolean);
+          return ids.length > 0 ? ids.join(",") : undefined;
+        },
         run: async () => {
           const resp = await ctx.client.jira().post<{ workflows?: Array<{ id?: string }> }>(
             `${API}/workflows/create`,
@@ -163,9 +168,6 @@ export const workflowTools = (): AnyToolDef[] => [
           return resp.data;
         },
       });
-      const created = (entry.after as { workflows?: Array<{ id?: string }> })?.workflows ?? [];
-      const ids = created.map((w) => w.id).filter(Boolean);
-      if (ids.length > 0) entry.target = { ...entry.target, id: ids.join(",") };
       return { ok: true, journal_id: entry.opId, created: entry.after };
     },
   }),

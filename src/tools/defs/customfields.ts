@@ -84,17 +84,13 @@ export const customFieldTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE /rest/api/3/field/{id} on the created field.",
+        deriveTargetId: (after) => (after as { id?: string })?.id,
         run: async () => {
           const resp = await ctx.client.jira().post<{ id: string; name: string }>("/rest/api/3/field", body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string; name?: string };
-      // Re-stamp target.id so revert can find the new field id.
-      if (created?.id) {
-        entry.target = { ...entry.target, id: created.id };
-      }
-      return { ok: true, journal_id: entry.opId, field: created };
+      return { ok: true, journal_id: entry.opId, field: entry.after };
     },
   }),
 

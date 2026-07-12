@@ -188,8 +188,14 @@ export function registerWrappedTool(
               (e as Error & { journalEntry?: JournalEntry }).journalEntry = entry;
               throw e;
             }
+            // Persist any created id onto the target so revert can find it.
+            const target =
+              jArgs.deriveTargetId && jArgs.deriveTargetId(after)
+                ? { ...jArgs.target, id: jArgs.deriveTargetId(after) as string }
+                : jArgs.target;
             return deps.journal.complete(opId, {
               ...jArgs,
+              target,
               after,
               outcome,
               revertible: jArgs.revertible ?? false,
