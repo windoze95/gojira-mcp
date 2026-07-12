@@ -7,9 +7,30 @@ import { reverters } from "../../operations/revert.js";
 /**
  * Confluence admin tools (spaces, permissions, templates, blueprints,
  * content restrictions). OAuth via confluenceBase.
+ *
+ * Scope note: Confluence is mid-migration between v1 and v2.
+ *   - v2 space READS (/wiki/api/v2/spaces*) require GRANULAR scopes
+ *     (read:space:confluence, read:space.permission:confluence). Classic
+ *     scopes return 401 on v2 — verified against the dev tenant.
+ *   - v1 space WRITES (POST/PUT/DELETE /wiki/rest/api/space) still exist and
+ *     use classic write:confluence-space. Only the v1 space GET was removed
+ *     (410 Gone), so before-snapshots must come from v2.
+ * A working deployment therefore needs BOTH classic write scopes AND the
+ * granular read:space scopes. See docs/oauth/scope-grammar.md.
  */
 const V2 = "/wiki/api/v2";
 const V1 = "/wiki/rest/api";
+
+/** Read a space's current state via v2 (the v1 GET was removed). Returns the first match or null. */
+async function spaceBeforeSnapshot(
+  ctx: import("../types.js").ToolContext,
+  spaceKey: string,
+): Promise<unknown> {
+  const resp = await ctx.client
+    .confluence()
+    .get<{ results?: unknown[] }>(`${V2}/spaces?keys=${encodeURIComponent(spaceKey)}`);
+  return resp.data.results?.[0] ?? null;
+}
 
 export const confluenceAdminTools = (): AnyToolDef[] => [
   defineTool({
@@ -80,14 +101,13 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the created space (Confluence v1: rest/api/space/{key}).",
+        deriveTargetId: (after) => (after as { id?: string | number })?.id?.toString(),
         run: async () => {
           const resp = await ctx.client.confluence().post<{ id: string }>(`${V1}/space`, body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string };
-      if (created?.id) entry.target = { ...entry.target, id: created.id };
-      return { ok: true, journal_id: entry.opId, space: created };
+      return { ok: true, journal_id: entry.opId, space: entry.after };
     },
   }),
   defineTool({
@@ -105,15 +125,16 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     },
     handler: async (input, ctx) => {
       const c = ctx.client.confluence();
-      const before = await c.get<unknown>(`${V1}/space/${encodeURIComponent(input.spaceKey)}`);
+      // v1 GET /space/{key} was removed (410); read current state from v2.
+      const before = await spaceBeforeSnapshot(ctx, input.spaceKey);
       const body: Record<string, unknown> = {};
       if (input.name !== undefined) body.name = input.name;
       if (input.description !== undefined) body.description = { plain: { value: input.description } };
-      const after = { ...(before.data as object), ...body };
+      const after = { ...(before as object), ...body };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "confluence.updateConfluenceSpace",
         target: { kind: "confluence_space", id: input.spaceKey },
-        before: before.data,
+        before,
         after,
       });
       if (dry) return dry;
@@ -122,7 +143,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
         tool: "confluence.updateConfluenceSpace",
         cloudId: ctx.cloudId,
         target: { kind: "confluence_space", id: input.spaceKey },
-        before: before.data,
+        before,
         request: body,
         revertible: true,
         revertHint: "PUT the captured `before` payload back.",
@@ -144,12 +165,13 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     input: { spaceKey: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
       const c = ctx.client.confluence();
-      const before = await c.get<unknown>(`${V1}/space/${encodeURIComponent(input.spaceKey)}`);
+      // v1 GET /space/{key} was removed (410); read current state from v2.
+      const before = await spaceBeforeSnapshot(ctx, input.spaceKey);
       if (input.commit !== true) {
         return buildDeleteDryRun({
           tool: "confluence.deleteConfluenceSpace",
           target: { kind: "confluence_space", id: input.spaceKey },
-          before: before.data,
+          before,
         });
       }
       const entry = await ctx.journalOp({
@@ -157,7 +179,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
         tool: "confluence.deleteConfluenceSpace",
         cloudId: ctx.cloudId,
         target: { kind: "confluence_space", id: input.spaceKey },
-        before: before.data,
+        before,
         request: { spaceKey: input.spaceKey } as Record<string, unknown>,
         revertible: false,
         run: async () => {
