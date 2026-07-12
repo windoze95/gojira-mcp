@@ -26,6 +26,12 @@ session, not as a replacement.
 
 ## Quickstart
 
+> **Deploying for real?** Follow the end-to-end
+> **[Turn-key setup guide](docs/deployment/turnkey-setup.md)** — it has the
+> complete, verified scope list (including the granular Confluence/CMDB scopes),
+> the API-token binding step, and `npm run preflight` to validate a config before
+> go-live. The quickstart below is the condensed version.
+
 ### 1. Generate an encryption key
 
 ```bash

@@ -18,6 +18,7 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "generate-key": "tsx scripts/generate-encryption-key.ts",
+    "preflight": "bash scripts/preflight.sh",
     "docs:tools": "tsx scripts/gen-tool-docs.ts"
   },
   "dependencies": {
