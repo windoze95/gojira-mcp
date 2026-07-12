@@ -23,7 +23,7 @@ Connect/Forge app credential · **UI** = no public API at any auth level.
 | Knowledge‑base article search | REST‑token | 200 |
 | Workflow transition rules (conditions/validators/post‑functions) | REST‑OAuth | new workflow API; wired in the workflow rewrite |
 | Assets / CMDB | REST‑OAuth | needs the `cmdb-*:jira` granular scopes |
-| Confluence spaces/pages | REST‑OAuth | needs granular `space`/`page` scopes |
+| Confluence spaces/templates/restrictions | **REST‑token** | verified live via the site host + API token (v1+v2 both 200). OAuth can't run these: v2 401s without granular scopes and the v1 space API is **410 Gone** on the OAuth host. `setContentRestrictions` writes need a paid Confluence plan (403 on Free). |
 | **Portal request forms + IT‑support forms** | **REST‑token** | JSM **Forms API** Basic‑auth host (`api.atlassian.com/jira/forms/cloud/{cloudId}`) works with the admin API token — **no OAuth scope needed**. Full template lifecycle verified live (create 200 → export → update → delete → 404). Shipped as the `forms.*` tools. |
 
 ## ✅ Automation rules — reachable via REST (corrected finding)

@@ -7,7 +7,6 @@ import type { ToolContext, ToolDefinition, ToolDeps } from "./types.js";
 import {
   AtlassianClient,
   jiraBase,
-  confluenceBase,
   adminBase,
   assetsBase,
   automationBase,
@@ -388,14 +387,6 @@ function makeClientFactories(opts: {
       if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
       return new AtlassianClient({
         baseURL: jiraBase(cloudId),
-        auth: { bearer: oauthBearer() },
-        onCallMeta,
-      });
-    },
-    confluence: () => {
-      if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
-      return new AtlassianClient({
-        baseURL: confluenceBase(cloudId),
         auth: { bearer: oauthBearer() },
         onCallMeta,
       });

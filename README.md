@@ -153,8 +153,8 @@ auto-generated catalog.
 | `write_jsm_admin` | Jira Service Management | 7 | api_token | Same surface + form templates — create/update/delete |
 | `read_assets` | Assets (JSM add-on) | 11 | api_token | Assets/Insight schemas, types, objects — read |
 | `write_assets` | Assets (JSM add-on) | 10 | api_token | Mutate Assets data and schema |
-| `read_confluence_admin` | Confluence | 6 | oauth | Spaces, templates, blueprints, restrictions — read |
-| `write_confluence_admin` | Confluence | 4 | oauth | Create/update/delete spaces, set restrictions |
+| `read_confluence_admin` | Confluence | 6 | api_token | Spaces, templates, blueprints, restrictions — read |
+| `write_confluence_admin` | Confluence | 4 | api_token | Create/update/delete spaces, set restrictions (restrictions need a paid Confluence plan) |
 | `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — **also gated by `GOJIRA_ENABLE_ORG_ADMIN`** |
 
 Notes:

@@ -69,8 +69,6 @@ export interface ToolContext {
 export interface AtlassianClientFactories {
   /** OAuth-authed Jira tenant base for the resolved cloudId. */
   jira(): AtlassianClient;
-  /** OAuth-authed Confluence tenant base for the resolved cloudId. */
-  confluence(): AtlassianClient;
   /** API-token-authed direct REST against the site URL. */
   apiTokenJira(): AtlassianClient;
   /** Org-admin-token-authed admin.atlassian.com base. */

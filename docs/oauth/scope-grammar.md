@@ -44,10 +44,9 @@ ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account \
     read:servicedesk-request write:servicedesk-request \
     manage:servicedesk-customer
 
-# Adds Confluence admin + workflow/scheme writes
+# Adds workflow/scheme writes (Confluence admin needs NO OAuth scopes —
+# it rides the per-user API token; see the granular-scopes section below)
 ATLASSIAN_OAUTH_SCOPES=... \
-    read:confluence-space.summary write:confluence-space \
-    read:confluence-content.all write:confluence-content \
     manage:jira-webhook
 ```
 
@@ -60,11 +59,11 @@ Some tool groups call newer APIs that only honor Atlassian **granular** scopes.
 Classic scopes return `401 "scope does not match"` on these. Add the granular
 scopes alongside the classic ones where you enable the group:
 
-- **Confluence space reads (v2)** — `confluence.listConfluenceSpaces`,
-  `getConfluenceSpace`, `listSpacePermissions`, and the space update/delete
-  before-snapshots hit `/wiki/api/v2/spaces*`. Add
-  `read:space:confluence`, `read:space.permission:confluence`.
-  (The v1 space *writes* still use classic `write:confluence-space`.)
+- **Confluence admin — no OAuth scopes at all.** The `confluence.*` tools moved
+  to the per-user API token via the site host (Basic auth), because OAuth
+  cannot run them: v2 space reads 401 without granular scopes, and the v1 space
+  API they depend on returns **410 Gone** on the OAuth host (verified live).
+  See [api-token-side-channel.md](api-token-side-channel.md).
 - **Assets / CMDB** — every `assets.*` tool authenticates with the OAuth bearer
   against `api.atlassian.com/jsm/assets/...`. Add
   `read:cmdb-object:jira`, `write:cmdb-object:jira`,
