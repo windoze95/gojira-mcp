@@ -36,13 +36,22 @@ used the wrong credential. Verified live:
   token via Basic auth** (`email:token`) — the same `api_token` mode the JSM
   tools use. NOT OAuth 3LO (a 3LO token gets `401 scope does not match`; there is
   no automation OAuth scope), and NOT the token as a Bearer (→ 403).
-- Verified live against the dev tenant: `GET /rule/summary` → **200**, and writes
-  (`POST /rule`, `POST /rule/manual/search`) → **400 validation** (i.e. authorized,
-  body-dependent) — never 401/404. Endpoints from the OpenAPI spec: list is
-  `GET /rule/summary`, get/update/delete are `/rule/{uuid}`, enable/disable is
-  `PUT /rule/{uuid}/state`.
+- Verified live against the dev tenant — **full lifecycle**: `POST /rule` →
+  **201** `{ruleUuid}` · `GET /rule/summary` → 200 · `GET /rule/{uuid}` → 200
+  (exports the full rule config) · `PUT /rule/{uuid}/state` → 200 ·
+  `DELETE /rule/{uuid}` → 200 → subsequent GET 404 · `POST /template/search`,
+  `GET /template/{id}`, `POST /template/create` → 200 (created a real rule from
+  `itsm_template_38`-class templates).
+- Contract gotchas the OpenAPI spec hides: the state body is
+  `{ "value": "ENABLED"|"DISABLED" }` (a `{state}` key 400s), and DELETE 400s on
+  an ENABLED rule ("Rule cannot be deleted unless it is already disabled") — so
+  delete flows must disable first. Component `value` shapes are undocumented; the
+  practical authoring path is create-from-template (or UI), export via
+  `GET /rule/{uuid}`, and adapt.
 - The one requirement: the token's account must be a **Jira administrator** (holds
-  the `ADMINISTER` global permission). A non-admin account 403s on every call.
+  the `ADMINISTER` global permission). A non-admin account 403s on every call, and
+  a token minted *before* the admin grant keeps its stale permissions — grant
+  first, then create the token.
 
 gojira's `automation.*` tools use the bound API token via Basic auth against these
 endpoints. **No Forge app is required.**
