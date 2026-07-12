@@ -133,7 +133,13 @@ export const automationTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "automation_rule", name: `template:${input.templateId}` },
         before: null,
-        request: body,
+        // Journal parameter KEYS only — template parameters can carry
+        // connection material (webhook URLs, header values) for some templates.
+        request: {
+          templateId: input.templateId,
+          ruleHome: input.ruleHome,
+          parameterKeys: input.parameters ? Object.keys(input.parameters) : [],
+        },
         revertible: true,
         revertHint: "Disable, then DELETE the created rule by its UUID.",
         deriveTargetId: (after) => (after as { ruleUuid?: string })?.ruleUuid,
@@ -175,7 +181,9 @@ export const automationTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "automation_rule", name: (input.rule as { name?: string }).name ?? "(unnamed)" },
         before: null,
-        request: { rule: (input.rule as { name?: string }).name } as Record<string, unknown>,
+        // The 201 response is only { ruleUuid } — journal the full submitted
+        // config so the entry alone suffices to re-create the rule.
+        request: { rule: input.rule } as Record<string, unknown>,
         revertible: true,
         revertHint: "Disable, then DELETE the rule by its UUID.",
         // Live response shape is { ruleUuid } (201); older shapes may use id.
@@ -216,7 +224,7 @@ export const automationTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "automation_rule", id: input.ruleId },
         before: before.data,
-        request: { ruleId: input.ruleId } as Record<string, unknown>,
+        request: { ruleId: input.ruleId, rule: input.rule } as Record<string, unknown>,
         revertible: true,
         revertHint: "PUT the captured `before` rule back to the same UUID.",
         run: async () => {
@@ -255,11 +263,23 @@ export const automationTools = (): AnyToolDef[] => [
         request: { ruleId: input.ruleId } as Record<string, unknown>,
         revertible: false,
         run: async () => {
-          // The API 400s on deleting an ENABLED rule — disable first.
-          await ctx.client
-            .automation()
-            .put<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}/state`, { value: "DISABLED" });
-          await ctx.client.automation().delete<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
+          // The API 400s on deleting an ENABLED rule — disable first, but only
+          // when actually enabled, and re-enable on a failed delete so a partial
+          // failure doesn't silently leave the rule disabled.
+          const path = `${BASE}/rule/${encodeURIComponent(input.ruleId)}`;
+          const wasEnabled = (before.data as { rule?: { state?: string } })?.rule?.state === "ENABLED";
+          if (wasEnabled) {
+            await ctx.client.automation().put<unknown>(`${path}/state`, { value: "DISABLED" });
+          }
+          try {
+            await ctx.client.automation().delete<unknown>(path);
+          } catch (err) {
+            if (wasEnabled) {
+              // Best-effort compensation; the original error is what matters.
+              await ctx.client.automation().put<unknown>(`${path}/state`, { value: "ENABLED" }).catch(() => {});
+            }
+            throw err;
+          }
           return { deleted: input.ruleId };
         },
       });
@@ -281,10 +301,17 @@ export const automationTools = (): AnyToolDef[] => [
       input: { ruleId: z.string().min(1).describe("The rule UUID."), commit: z.boolean().optional() },
       handler: async (input, ctx) => {
         const body = { value: target };
+        // Capture the actual prior state so a revert restores what WAS, not a
+        // blind inverse (enabling an already-enabled rule is a no-op; reverting
+        // it must not disable the rule).
+        const current = await ctx.client
+          .automation()
+          .get<{ rule?: { state?: string } }>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
+        const priorState = current.data?.rule?.state ?? null;
         const dry = buildDryRunIfNotCommitted(input, {
           tool: `automation.${verb}AutomationRule`,
           target: { kind: "automation_rule", id: input.ruleId },
-          before: null,
+          before: { state: priorState },
           after: body,
         });
         if (dry) return dry;
@@ -293,10 +320,10 @@ export const automationTools = (): AnyToolDef[] => [
           tool: `automation.${verb}AutomationRule`,
           cloudId: ctx.cloudId,
           target: { kind: "automation_rule", id: input.ruleId },
-          before: null,
+          before: { state: priorState },
           request: { ruleId: input.ruleId, state: target } as Record<string, unknown>,
           revertible: true,
-          revertHint: `Call automation.${inverse}AutomationRule on the same UUID.`,
+          revertHint: `Restore the captured prior state (${priorState ?? "unknown"}).`,
           run: async () => {
             const resp = await ctx.client
               .automation()
@@ -334,7 +361,7 @@ reverters.register("automation.updateAutomationRule", async (entry, anyCtx) => {
   return { reverted: id, response: resp.data };
 });
 
-for (const [name, value] of [
+for (const [name, fallback] of [
   ["automation.enableAutomationRule", "DISABLED"],
   ["automation.disableAutomationRule", "ENABLED"],
 ] as const) {
@@ -342,6 +369,10 @@ for (const [name, value] of [
     const ctx = anyCtx as import("../types.js").ToolContext;
     const id = (entry.target as { id?: string }).id;
     if (!id) throw new Error("Cannot revert: rule UUID missing.");
+    // Restore the journaled prior state; fall back to the blind inverse only
+    // for legacy entries that captured no before-state.
+    const prior = (entry.before as { state?: string } | null)?.state;
+    const value = prior === "ENABLED" || prior === "DISABLED" ? prior : fallback;
     const resp = await ctx.client.automation().put<unknown>(`/rule/${encodeURIComponent(id)}/state`, { value });
     return { reverted: id, state: value, response: resp.data };
   });

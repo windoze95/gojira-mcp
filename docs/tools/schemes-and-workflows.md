@@ -5,7 +5,7 @@ permission/notification/workflow/screen/issue-type/field-configuration
 schemes, workflow CRUD with async publish, Confluence space administration,
 and the isolated `delete_projects` group.
 
-Roughly 43 tools across 8 permission groups.
+42 tools across 7 permission groups.
 
 ## Schemes (`read_schemes` / `write_schemes`)
 

@@ -11,8 +11,18 @@ import type { Logger } from "../utils/logger.js";
 
 import type { PermissionGroup } from "./permissionGroups.js";
 
-/** Auth method for a tool. */
-export type AuthMethod = "oauth" | "api_token" | "org_admin" | "none";
+/**
+ * Auth method for a tool.
+ * - "oauth": requires a fresh per-user OAuth token.
+ * - "api_token": requires a bound per-user API token (OAuth loaded when present).
+ * - "oauth_or_api_token": loads whichever of the two the caller has, requires
+ *   neither up front — the client factory the handler actually uses throws if
+ *   its credential is missing. For tools like revertOperation that dispatch to
+ *   reverters with heterogeneous auth needs.
+ * - "org_admin": uses the instance-wide org-admin key (separately gated).
+ * - "none": no Atlassian credential.
+ */
+export type AuthMethod = "oauth" | "api_token" | "oauth_or_api_token" | "org_admin" | "none";
 
 export type { PermissionGroup };
 

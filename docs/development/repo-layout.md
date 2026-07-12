@@ -61,18 +61,18 @@ gojira-mcp/
 │           ├── defineTool.ts          # author-facing helper
 │           ├── index.ts               # allTools() aggregator
 │           ├── utility.ts             # gojira.* (7)
-│           ├── jsm.ts                 # jsm.* (33)
-│           ├── assets.ts              # assets.* (23)
-│           ├── automation.ts          # automation.* (9)
+│           ├── jsm.ts                 # jsm.* (16)
+│           ├── assets.ts              # assets.* (21)
+│           ├── automation.ts          # automation.* (11)
 │           ├── customfields.ts        # customfields.* (8)
 │           ├── projects.ts            # projects.* read+create+archive (5)
 │           ├── deleteProjects.ts      # projects.deleteJiraProject (1, isolated group)
 │           ├── schemes.ts             # schemes.* (20)
-│           ├── workflows.ts           # workflows.* (12)
+│           ├── workflows.ts           # workflows.* (11)
 │           ├── confluence.ts          # confluence.* (10)
 │           ├── agile.ts               # agile.* (8)
 │           ├── filtersDashboards.ts   # filters.* + dashboards.* (10)
-│           └── orgAdmin.ts            # orgAdmin.* (24)
+│           └── orgAdmin.ts            # orgAdmin.* (17)
 └── tests/
     ├── helpers/
     │   └── redis.ts                   # ioredis-mock helper for unit tests

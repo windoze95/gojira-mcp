@@ -16,7 +16,12 @@ needs a new group:
 - Update every deployment's `GOJIRA_ENABLED_GROUPS` if you want the new
   group registered (allowlist semantics — new groups never auto-enable).
 
-For our example we reuse `read_automation` — OAuth.
+For our example we reuse `read_automation`. Note the auth: the whole
+automation group is `authMethod: "api_token"`, not OAuth — the
+automation public API has no OAuth scope, so these tools authenticate
+with the bound per-user API token (Basic auth), and the token's account
+must be a Jira administrator. See
+[API token side-channel](../oauth/api-token-side-channel.md).
 
 ## 2. Pick the name
 
@@ -42,7 +47,7 @@ defineTool({
   name: "automation.getRuleHistory",
   description: "Get the run history for a single automation rule.",
   group: "read_automation",
-  authMethod: "oauth",
+  authMethod: "api_token",
   destructive: false,
   needsCloudId: true,
   input: {
@@ -53,8 +58,8 @@ defineTool({
   handler: async (input, ctx) => {
     const p = new URLSearchParams({ limit: String(input.limit ?? 25) });
     if (input.since) p.set("since", input.since);
-    const resp = await ctx.client.jira().get<unknown>(
-      `${BASE}/rules/${encodeURIComponent(input.ruleId)}/history?${p.toString()}`,
+    const resp = await ctx.client.automation().get<unknown>(
+      `${BASE}/rule/${encodeURIComponent(input.ruleId)}/history?${p.toString()}`,
     );
     return resp.data;
   },
@@ -71,7 +76,7 @@ Read tools (the example above) need none. Destructive tools must:
 ```ts
 handler: async (input, ctx) => {
   // Snapshot for diff and journal
-  const before = await ctx.client.jira().get<unknown>(`/rest/.../${id}`);
+  const before = await ctx.client.automation().get<unknown>(`/rule/${id}`);
   const body = { ... };
   const after = { ...(before.data as object), ...body };
 
@@ -95,7 +100,7 @@ handler: async (input, ctx) => {
     revertible: true,
     revertHint: "PUT the captured `before` payload back.",
     run: async () => {
-      const resp = await ctx.client.jira().put<unknown>(`/rest/.../${id}`, body);
+      const resp = await ctx.client.automation().put<unknown>(`/rule/${id}`, body);
       return resp.data;
     },
   });
@@ -123,7 +128,7 @@ reverters.register("automation.updateAutomationRule", async (entry, anyCtx) => {
   if (!id || before == null) {
     throw new Error("Cannot revert: required entry fields missing");
   }
-  await ctx.client.jira().put<unknown>(`/rest/.../${id}`, before);
+  await ctx.client.automation().put<unknown>(`/rule/${id}`, before);
   return { restored: id };
 });
 ```
@@ -195,8 +200,11 @@ group-family doc (`docs/tools/<family>.md`) only when:
   bound token; OAuth tools won't dispatch without a fresh upstream
   credential. Pick what the underlying Atlassian API requires.
 - **Skipping `needsCloudId: true`.** Tools that hit
-  `api.atlassian.com/ex/jira/<cloudId>/...` need it. Without it,
-  `ctx.cloudId` will be `null` and `ctx.client.jira()` throws.
+  `api.atlassian.com/ex/jira/<cloudId>/...` need it, as do the
+  automation tools (their base URL,
+  `api.atlassian.com/automation/public/jira/<cloudId>/rest/v1`, embeds
+  the cloudId too). Without it, `ctx.cloudId` will be `null` and the
+  client factory throws.
 
 ## See also
 

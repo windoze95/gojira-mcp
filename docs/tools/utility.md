@@ -189,7 +189,11 @@ shape.
 Replays the inverse of a previously-journaled operation, if a reverter
 is registered.
 
-**Auth:** OAuth.
+**Auth:** OAuth *or* bound API token (`oauth_or_api_token`) — whichever the
+caller has is loaded, and the reverter's client enforces what it actually
+needs (e.g. automation reverters need the bound API token). Requires a
+resolvable cloudId and refuses to revert an entry journaled on a different
+cloudId.
 
 **Input:**
 

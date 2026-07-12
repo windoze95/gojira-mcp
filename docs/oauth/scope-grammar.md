@@ -69,10 +69,16 @@ scopes alongside the classic ones where you enable the group:
   against `api.atlassian.com/jsm/assets/...`. Add
   `read:cmdb-object:jira`, `write:cmdb-object:jira`,
   `read:cmdb-schema:jira`, `write:cmdb-schema:jira`.
-- **Jira automation** — the automation public API requires the automation scope,
-  which standard 3LO apps cannot request (there is no Automation entry in the
-  developer-console scope list). `read_automation`/`write_automation` therefore
-  only work with a Connect/Forge-distributed credential; otherwise disable them.
+- **Jira automation** — no OAuth scope exists for the automation public API
+  (there is no Automation entry in the developer-console scope list), and none
+  is needed: `read_automation`/`write_automation` bypass OAuth entirely and
+  authenticate with the per-user API token (bound via `gojira.bindApiToken`)
+  as **Basic auth** against
+  `api.atlassian.com/automation/public/jira/<cloudId>/rest/v1`. The token's
+  account must be a Jira administrator (ADMINISTER) — a non-admin token gets
+  403 on every call, and a token created *before* the admin grant keeps its
+  stale permissions, so create the token after granting admin. See
+  [API token side-channel](api-token-side-channel.md).
 
 These map to real API limits, not gojira config — see the header comments in
 `src/tools/defs/confluence.ts`, `assets.ts`, and `automation.ts`.

@@ -243,14 +243,25 @@ export const utilityTools = (): AnyToolDef[] => [
     description:
       "Reverts a previously-journaled operation (where mechanically possible). Logs the revert itself as a new journal entry. Use `commit: true` to apply.",
     group: "utility",
-    authMethod: "oauth",
-    needsCloudId: false,
+    // Reverters dispatch to heterogeneous clients (OAuth jira/confluence,
+    // api-token JSM/automation), so load whichever credentials the caller has
+    // and resolve a cloudId — the concrete client factory enforces what the
+    // specific reverter actually needs.
+    authMethod: "oauth_or_api_token",
+    needsCloudId: true,
     destructive: true,
     input: { op_id: z.string().uuid(), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
       const entry = await ctx.journal.get(ctx.accountId, input.op_id);
       if (!entry) throw new NotFoundError(`No journal entry for opId ${input.op_id}`);
       assertRevertible(entry);
+      // Never revert against a different tenant than the original op ran on.
+      if (entry.cloudId && ctx.cloudId && entry.cloudId !== ctx.cloudId) {
+        throw new ValidationError(
+          "Journal entry belongs to a different cloudId than this call resolves to.",
+          { entry_cloud_id: entry.cloudId, resolved_cloud_id: ctx.cloudId },
+        );
+      }
       if (input.commit !== true) {
         return {
           dry_run: true,

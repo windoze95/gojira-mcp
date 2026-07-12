@@ -1,6 +1,6 @@
 # Tools overview
 
-gojira-mcp exposes **170 tools** spread across **13 permission groups**
+gojira-mcp exposes **145 tools** spread across **22 permission groups**
 (plus an always-available `utility` group). Each tool is defined
 declaratively via `defineTool` in `src/tools/defs/*.ts`.
 
@@ -8,10 +8,10 @@ declaratively via `defineTool` in `src/tools/defs/*.ts`.
 
 | Doc | Theme | Tool count | Tool names start with |
 |---|---|---|---|
-| [Daily admin](daily-admin.md) | JSM, Assets, Automation, Custom fields, Projects (read/create/archive) | ~95 | `jsm.`, `assets.`, `automation.`, `customfields.`, `projects.` |
-| [Schemes and workflows](schemes-and-workflows.md) | Schemes, workflow CRUD + publish, Confluence admin, project deletion | ~43 | `schemes.`, `workflows.`, `confluence.`, `projects.deleteJiraProject` |
+| [Daily admin](daily-admin.md) | JSM, Assets, Automation, Custom fields, Projects (read/create/archive) | ~61 | `jsm.`, `assets.`, `automation.`, `customfields.`, `projects.` |
+| [Schemes and workflows](schemes-and-workflows.md) | Schemes, workflow CRUD + publish, Confluence admin, project deletion | ~42 | `schemes.`, `workflows.`, `confluence.`, `projects.deleteJiraProject` |
 | [Agile and views](agile-and-views.md) | Boards, sprints, epics, filters, dashboards | ~18 | `agile.`, `filters.`, `dashboards.` |
-| [Org admin](org-admin.md) | `admin.atlassian.com` (gated separately) | 24 | `orgAdmin.` |
+| [Org admin](org-admin.md) | `admin.atlassian.com` (gated separately) | 17 | `orgAdmin.` |
 | [Utility](utility.md) (always available) | Health, identity, journal, side-channel binding | 7 | `gojira.` |
 
 Counts are approximate; see the [catalog](catalog.md) for the exact
@@ -50,7 +50,7 @@ interface ToolDefinition {
   name: string;                       // dot-prefixed, e.g. "customfields.createCustomField"
   description: string;                // surfaces in client UIs
   group: PermissionGroup;             // e.g. "write_customfields"
-  authMethod: "oauth" | "api_token" | "org_admin" | "none";
+  authMethod: "oauth" | "api_token" | "oauth_or_api_token" | "org_admin" | "none";
   destructive: boolean;               // true → commit-positive consent enforced
   needsCloudId: boolean;              // true → resolveCloudId applied
   inputSchema: ZodObject;             // converted to JSON schema for the MCP client
@@ -107,12 +107,12 @@ See [adding-a-tool.md](../development/adding-a-tool.md) for the recipe:
 
 ## Practical surface size
 
-The complete tool set (170) is too large for any single frontier model
+The complete tool set (145) is too large for any single frontier model
 to dispatch with maximum accuracy. To keep model behaviour sharp:
 
 - **Tighten the allowlist:** set `GOJIRA_ENABLED_GROUPS` to exactly the
   groups this deployment needs. For a read-only audit deployment, list
-  only `utility` + the `read_*` groups — model only sees ~30 tools.
+  only `utility` + the `read_*` groups — model only sees ~76 tools.
 - **One deployment per use-case:** rather than running one big instance
   with everything enabled, run a JSM-only instance, a workflow-admin
   instance, etc. Smaller surface = sharper tool selection.

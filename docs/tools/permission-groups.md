@@ -22,22 +22,29 @@ unless it's named.
 | `read_schemes` | Jira | 13 | oauth | Permission/notification/workflow/screen/issue-type/field-config schemes — read |
 | `write_schemes` | Jira | 7 | oauth | Create/update/delete schemes + project assignments |
 | `read_workflows` | Jira | 6 | oauth | List/get workflows + transition components |
-| `write_workflows` | Jira | 6 | oauth | Create/update/delete workflows, transitions, publish |
-| `read_automation` | Jira | 4 | oauth | List automation rules, audit log, usage stats |
-| `write_automation` | Jira | 5 | oauth | Create/update/delete/enable/disable rules |
+| `write_workflows` | Jira | 5 | oauth | Create/update/delete workflows, transitions, publish |
+| `read_automation` | Jira | 5 | api_token | List/get rules, manual-rule search, rule templates |
+| `write_automation` | Jira | 6 | api_token | Create (incl. from template)/update/delete/enable/disable rules |
 | `read_customfields` | Jira | 3 | oauth | List/get fields and their contexts |
 | `write_customfields` | Jira | 5 | oauth | Create/update/delete fields, assign contexts, set options |
 | `read_filters_dashboards` | Jira | 4 | oauth | List/get filters and dashboards |
 | `write_filters_dashboards` | Jira | 6 | oauth | Create/update/delete filters and dashboards |
 | `read_agile` | Jira Software | 6 | oauth | Boards, sprints, epics — read |
 | `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
-| `read_jsm_admin` | Jira Service Management | 18 | api_token | List/get for service desks, queues, SLAs, portals, etc. |
-| `write_jsm_admin` | Jira Service Management | 15 | api_token | Create/update/delete for the same surface |
+| `read_jsm_admin` | Jira Service Management | 12 | api_token | List/get for service desks, queues, SLAs, portals, etc. |
+| `write_jsm_admin` | Jira Service Management | 4 | api_token | Create/update/delete for the same surface |
 | `read_assets` | Assets (JSM add-on) | 11 | api_token | Read for Assets/Insight schemas, types, objects |
-| `write_assets` | Assets (JSM add-on) | 12 | api_token | Mutate Assets data and schema |
+| `write_assets` | Assets (JSM add-on) | 10 | api_token | Mutate Assets data and schema |
 | `read_confluence_admin` | Confluence | 6 | oauth | List/get spaces, templates, blueprints, restrictions |
 | `write_confluence_admin` | Confluence | 4 | oauth | Create/update/delete spaces, set restrictions |
-| `admin_org` | Atlassian Org (`admin.atlassian.com`) | 24 | org_admin | All org-admin ops — gated separately by `GOJIRA_ENABLE_ORG_ADMIN` |
+| `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — gated separately by `GOJIRA_ENABLE_ORG_ADMIN` |
+
+Groups marked `api_token` use the per-user token bound via
+`gojira.bindApiToken`. For `read_automation`/`write_automation` the
+token's account must additionally be a **Jira administrator** — a
+non-admin token gets 403 on every automation call, and a token created
+*before* the admin grant keeps its stale permissions (create the token
+after the grant).
 
 ## Why some groups are "isolated"
 

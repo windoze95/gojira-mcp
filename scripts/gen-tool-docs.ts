@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { allTools } from "../src/tools/defs/index.js";
 import type { AnyToolDef } from "../src/tools/defs/defineTool.js";
-import { ALL_PERMISSION_GROUPS } from "../src/auth/scopes.js";
+import { ALL_PERMISSION_GROUPS } from "../src/tools/permissionGroups.js";
 
 const OUT_PATH = "docs/tools/catalog.md";
 

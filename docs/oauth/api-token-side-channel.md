@@ -11,6 +11,12 @@ time of writing:
 
 - **JSM admin** (request types, queues, SLAs, forms, portals, KB
   linking, organizations) → API-token-only
+- **Jira automation public API**
+  (`api.atlassian.com/automation/public/jira/<cloudId>/rest/v1`)
+  → API-token-only (Basic auth); no OAuth scope exists for it. The
+  token's account must also be a **Jira administrator** — non-admin
+  tokens get 403 on every call, and a token created before the admin
+  grant keeps stale permissions (create the token after the grant)
 - **Assets/Insight API** (`api.atlassian.com/jsm/assets/workspace/...`)
   → accepts OAuth bearer for some routes, API-token for others;
   workspace discovery requires OAuth
@@ -87,6 +93,7 @@ right `AtlassianClient` for the tool. The factories returned on `ctx.client`:
 | `ctx.client.jira()` | OAuth bearer | `api.atlassian.com/ex/jira/<cloudId>` |
 | `ctx.client.confluence()` | OAuth bearer | `api.atlassian.com/ex/confluence/<cloudId>` |
 | `ctx.client.apiTokenJira()` | API token Basic | `https://<site_url>` |
+| `ctx.client.automation()` | API token Basic (Jira-admin account required) | `api.atlassian.com/automation/public/jira/<cloudId>/rest/v1` |
 | `ctx.client.assets(wsId)` | OAuth bearer | `api.atlassian.com/jsm/assets/workspace/<wsId>/v1` |
 | `ctx.client.admin()` | Org admin bearer | `api.atlassian.com/admin/v1` |
 

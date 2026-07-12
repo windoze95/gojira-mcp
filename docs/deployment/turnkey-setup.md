@@ -119,16 +119,22 @@ Point your MCP client at `https://<your-host>/mcp`. It auto-discovers the OAuth
 endpoints, walks you through Atlassian consent (you pick the site), and starts
 listing tools. Each upstream call is attributable to the consenting user.
 
-## 9. Bind the JSM/Assets API token (per user, one-time)
+## 9. Bind the API token (per user, one-time)
 
-The `read_jsm_admin` / `write_jsm_admin` tools authenticate with a per-user
-Atlassian **API token** side-channel (not OAuth). Each user runs this once:
+The `read_jsm_admin` / `write_jsm_admin` **and** `read_automation` /
+`write_automation` tools authenticate with a per-user Atlassian **API token**
+side-channel (not OAuth). Each user runs this once:
 
 1. Create a token at <https://id.atlassian.com/manage-profile/security/api-tokens>
    ("Create API token"). Copy it. *(This page requires an emailed one-time
    passcode to your account — a normal Atlassian identity step.)*
 2. In your MCP client, call **`gojira.bindApiToken`** with your Atlassian email
    and the token. gojira encrypts it at rest and discovers your Assets workspace.
+
+For the **automation** groups, the token's account must be a **Jira
+administrator** (see §3) — otherwise every automation call 403s. Grant admin
+*before* creating the token: a token minted before the grant keeps the old
+permissions.
 
 (Assets tools use OAuth + the CMDB scopes from §3, not the API token.)
 
