@@ -34,7 +34,10 @@ In the Atlassian developer console:
    - `read:cmdb-object:jira`, `write:cmdb-object:jira`,
      `read:cmdb-schema:jira`, `write:cmdb-schema:jira`,
      `read:cmdb-type:jira`, `write:cmdb-type:jira`,
-     `read:cmdb-attribute:jira`, `write:cmdb-attribute:jira`
+     `read:cmdb-attribute:jira`, `write:cmdb-attribute:jira`,
+     `delete:cmdb-object:jira`, `delete:cmdb-schema:jira`,
+     `delete:cmdb-type:jira`, `delete:cmdb-attribute:jira`,
+     `import:import-configuration:cmdb`
    - `read:servicedesk-request` — for
      `GET /rest/servicedeskapi/assets/workspace`, which every `assets.*`
      call resolves first
@@ -94,7 +97,7 @@ At minimum:
 ```
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira delete:cmdb-object:jira delete:cmdb-schema:jira delete:cmdb-type:jira delete:cmdb-attribute:jira import:import-configuration:cmdb
 ATLASSIAN_PINNED_CLOUD_ID=<cloudId of your prod tenant>
 TOKEN_ENCRYPTION_KEY=<base64 from step 2>
 ALLOWED_ORIGINS=*
@@ -180,7 +183,7 @@ one expansion that widens `ATLASSIAN_OAUTH_SCOPES`:
 
 ```diff
 - ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration
-+ ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
++ ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira delete:cmdb-object:jira delete:cmdb-schema:jira delete:cmdb-type:jira delete:cmdb-attribute:jira import:import-configuration:cmdb
 ```
 
 Make sure those scopes are declared on the Atlassian app, then restart.

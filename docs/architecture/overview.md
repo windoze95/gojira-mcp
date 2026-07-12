@@ -67,7 +67,7 @@ delegated calls to Atlassian Cloud admin APIs.
 | Revert registry | `src/operations/revert.ts` | reverter functions keyed by tool name |
 | Consent | `src/consent/dryRun.ts` + `jsonPatch.ts` | commit-positive consent + RFC 6902 diffs |
 | Tool registry | `src/tools/registry.ts` + `wrapHandler.ts` | per-call context, operator-floor filter |
-| Tools | `src/tools/defs/*.ts` | 153 tool definitions across 23 permission groups |
+| Tools | `src/tools/defs/*.ts` | 155 tool definitions across 23 permission groups |
 | Server | `src/server.ts` | Express composition, session map, MCP transport |
 | Entry | `src/index.ts` | bootstrap + lifecycle |
 

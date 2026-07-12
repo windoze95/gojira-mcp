@@ -16,11 +16,15 @@ import { reverters } from "../../operations/revert.js";
  * Auth note: these tools authenticate with the caller's OAuth bearer (both the
  * workspace-discovery call and every data-plane call go through the OAuth-authed
  * `ctx.client.assets()` factory), so they require Assets/CMDB OAuth scopes on
- * the app — e.g. read:cmdb-object:jira, write:cmdb-object:jira,
- * read:cmdb-schema:jira, write:cmdb-schema:jira. (Previously these tools
- * declared the api_token side-channel, which the code never actually used.)
- * NOTE: endpoint corrections below follow Atlassian's Assets API reference; they
- * were NOT live-verified because the dev app lacks CMDB scopes.
+ * the app. The full set this surface needs:
+ *   read/write:cmdb-object:jira, read/write:cmdb-schema:jira,
+ *   read/write:cmdb-type:jira, read/write:cmdb-attribute:jira (the 8 core), plus
+ *   delete:cmdb-object:jira, delete:cmdb-schema:jira, delete:cmdb-type:jira,
+ *   delete:cmdb-attribute:jira (the delete tools) and
+ *   import:import-configuration:cmdb (startImport).
+ * NOTE: endpoints/scopes below were cross-checked against the Assets OpenAPI
+ * spec but NOT live-CRUD-verified — the dev site is JSM Free (Assets needs
+ * Premium; every data-plane call 403s "Access to Assets API was denied").
  */
 
 async function workspace(ctx: import("../types.js").ToolContext): Promise<string> {
@@ -410,6 +414,128 @@ export const assetsTools = (): AnyToolDef[] => [
     },
   }),
 
+  // Schema-lifecycle deletes — complete the create/update/DELETE triad for
+  // schema, object type, and attribute (previously only objects had a delete).
+  // All irreversible; each captures what it can into the journal `before`.
+  defineTool({
+    name: "assets.deleteObjectSchema",
+    description:
+      "Delete an object schema and everything in it (types, objects). **Irreversible and heavy** — the whole " +
+      "schema definition is captured in the journal `before`. Export it first with assets.exportAssetSchema.",
+    group: "write_assets",
+    authMethod: "oauth",
+    needsCloudId: true,
+    destructive: true,
+    input: { schemaId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`);
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "assets.deleteObjectSchema",
+          target: { kind: "asset_object_schema", id: input.schemaId },
+          before: before.data,
+          message: "This DELETES the schema and ALL its object types and objects. Irreversible.",
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.deleteObjectSchema",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object_schema", id: input.schemaId },
+        before: before.data,
+        request: { schemaId: input.schemaId } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          await c.delete<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`);
+          return { deleted: input.schemaId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "assets.deleteObjectType",
+    description:
+      "Delete an object type (and its objects). **Irreversible** — the type definition is captured in the journal.",
+    group: "write_assets",
+    authMethod: "oauth",
+    needsCloudId: true,
+    destructive: true,
+    input: { objectTypeId: z.string().min(1), commit: z.boolean().optional() },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      const before = await c.get<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}`);
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "assets.deleteObjectType",
+          target: { kind: "asset_object_type", id: input.objectTypeId },
+          before: before.data,
+          message: "This DELETES the object type and its objects. Irreversible.",
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.deleteObjectType",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object_type", id: input.objectTypeId },
+        before: before.data,
+        request: { objectTypeId: input.objectTypeId } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          await c.delete<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}`);
+          return { deleted: input.objectTypeId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+  defineTool({
+    name: "assets.deleteObjectTypeAttribute",
+    description:
+      "Delete an attribute from an object type by attribute id. **Irreversible.** (There is no single-attribute " +
+      "GET, so the journal captures the object type's full attribute list as `before` for reconstruction.)",
+    group: "write_assets",
+    authMethod: "oauth",
+    needsCloudId: true,
+    destructive: true,
+    input: {
+      objectTypeId: z.string().min(1).describe("Used only to snapshot the attribute list for the journal."),
+      attributeId: z.string().min(1),
+      commit: z.boolean().optional(),
+    },
+    handler: async (input, ctx) => {
+      const ws = await workspace(ctx);
+      const c = ctx.client.assets(ws);
+      // No single-attribute GET — snapshot the type's attribute list instead.
+      const list = await c.get<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}/attributes`);
+      if (input.commit !== true) {
+        return buildDeleteDryRun({
+          tool: "assets.deleteObjectTypeAttribute",
+          target: { kind: "asset_object_type_attribute", id: input.attributeId },
+          before: list.data,
+        });
+      }
+      const entry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "assets.deleteObjectTypeAttribute",
+        cloudId: ctx.cloudId,
+        target: { kind: "asset_object_type_attribute", id: input.attributeId },
+        before: list.data,
+        request: { objectTypeId: input.objectTypeId, attributeId: input.attributeId } as Record<string, unknown>,
+        revertible: false,
+        run: async () => {
+          // DELETE /objecttypeattribute/{id} — attribute id only (no objectTypeId in path).
+          await c.delete<unknown>(`/objecttypeattribute/${encodeURIComponent(input.attributeId)}`);
+          return { deleted: input.attributeId };
+        },
+      });
+      return { ok: true, journal_id: entry.opId };
+    },
+  }),
+
   defineTool({
     name: "assets.aqlSearch",
     description: "AQL (Assets Query Language) search.",
@@ -510,7 +636,14 @@ export const assetsTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const ws = await workspace(ctx);
       const c = ctx.client.assets(ws);
-      const before = await c.get<unknown>(`/object/${encodeURIComponent(input.objectId)}`);
+      const before = await c.get<{ objectType?: { id?: string | number } }>(
+        `/object/${encodeURIComponent(input.objectId)}`,
+      );
+      // The PUT schema marks objectTypeId required; Atlassian doesn't currently
+      // enforce it, but send it (from the object's own type) so we don't break
+      // if they ever do. The object's type never changes on an attribute update.
+      const objectTypeId = before.data.objectType?.id != null ? String(before.data.objectType.id) : undefined;
+      const putBody = { objectTypeId, attributes: input.attributes };
       const after = { ...(before.data as object), attributes: input.attributes };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "assets.updateObject",
@@ -529,7 +662,7 @@ export const assetsTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "PUT the captured `before.attributes` back.",
         run: async () => {
-          const resp = await c.put<unknown>(`/object/${encodeURIComponent(input.objectId)}`, { attributes: input.attributes });
+          const resp = await c.put<unknown>(`/object/${encodeURIComponent(input.objectId)}`, putBody);
           return resp.data;
         },
       });
@@ -592,19 +725,11 @@ export const assetsTools = (): AnyToolDef[] => [
   // the appropriate reference attribute. The read tool getObjectReferences uses
   // the valid /referenceinfo endpoint and is kept above.
 
-  defineTool({
-    name: "assets.getObjectAttachments",
-    description: "List attachments on an Assets object.",
-    group: "read_assets",
-    authMethod: "oauth",
-    needsCloudId: true,
-    input: { objectId: z.string().min(1) },
-    handler: async (input, ctx) => {
-      const ws = await workspace(ctx);
-      const resp = await ctx.client.assets(ws).get<unknown>(`/attachments/object/${encodeURIComponent(input.objectId)}`);
-      return resp.data;
-    },
-  }),
+  // NOTE: no assets.getObjectAttachments — the cloud Assets REST API has no
+  // attachments endpoint (the `/attachments/object/{id}` path is Server/Data
+  // Center only, and there is no OAuth scope that grants it). Object attachments
+  // on cloud are a UI-only feature (JSDCLOUD-10454 is unshipped). Verified
+  // against the Assets swagger: zero attachment paths.
   defineTool({
     name: "assets.getObjectHistory",
     description: "Get the change history for an Assets object.",
@@ -780,7 +905,7 @@ reverters.register("assets.updateObject", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
   const id = (entry.target as { id?: string }).id;
   if (!id) throw new Error("Cannot revert: object id missing from target.");
-  const before = entry.before as { attributes?: AssetAttribute[] } | null;
+  const before = entry.before as { attributes?: AssetAttribute[]; objectType?: { id?: string | number } } | null;
   if (!before) throw new Error("Cannot revert: journal entry has no captured `before` object.");
   const written = (entry.request as { attributes?: AssetAttribute[] }).attributes ?? [];
   if (written.length === 0) throw new Error("Cannot revert: journal entry recorded no attributes to restore.");
@@ -793,7 +918,11 @@ reverters.register("assets.updateObject", async (entry, anyCtx) => {
       objectAttributeValues: values.map((v) => ({ value: v.value ?? v.searchValue ?? v.displayValue })),
     };
   });
+  // Send objectTypeId (schema marks it required) from the captured object.
+  const objectTypeId = before.objectType?.id != null ? String(before.objectType.id) : undefined;
   const ws = await workspace(ctx);
-  const resp = await ctx.client.assets(ws).put<unknown>(`/object/${encodeURIComponent(id)}`, { attributes });
+  const resp = await ctx.client
+    .assets(ws)
+    .put<unknown>(`/object/${encodeURIComponent(id)}`, { objectTypeId, attributes });
   return { reverted: id, response: resp.data };
 });

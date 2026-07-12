@@ -63,7 +63,7 @@ gojira-mcp/
 │           ├── utility.ts             # gojira.* (7)
 │           ├── jsm.ts                 # jsm.* (16)
 │           ├── forms.ts               # forms.* (8)
-│           ├── assets.ts              # assets.* (21)
+│           ├── assets.ts              # assets.* (23)
 │           ├── automation.ts          # automation.* (11)
 │           ├── customfields.ts        # customfields.* (8)
 │           ├── projects.ts            # projects.* read+create+archive (5)

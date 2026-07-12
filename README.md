@@ -19,7 +19,7 @@ session, not as a replacement.
 | **Transport** | StreamableHTTP, per-session in-memory |
 | **Auth** | OAuth 2.1 to MCP clients; OAuth 2.0 3LO to Atlassian; per-user API token side-channel; org-admin API token (separate gate) |
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
-| **Tool count** | 153 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
+| **Tool count** | 155 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
 | **Tests** | 66 unit tests across 13 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, and site-pinning paths — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
 
 ---
@@ -115,13 +115,13 @@ name. Lower is better for model selection accuracy — see
 
 | Pattern | Tool count | Use case |
 |---|---|---|
-| 1 — Default safe (admin sandbox) | **135** | Single team's daily admin instance |
-| 2 — Read-only audit | **81** | Compliance / forensic review |
-| 3 — JSM/Assets specialist | **52** | Service-desk operators |
+| 1 — Default safe (admin sandbox) | **137** | Single team's daily admin instance |
+| 2 — Read-only audit | **80** | Compliance / forensic review |
+| 3 — JSM/Assets specialist | **54** | Service-desk operators |
 | 4 — Schemes/workflows admin | **63** | Jira config-changes only |
 | 5 — Org-admin (separate host) | **24** | `admin.atlassian.com` only |
-| 6 — Multi-tenant (prod + sandbox) | **135 each** | Two pinned instances side-by-side |
-| 7 — Local development | **135** | Same as default safe + debug logs |
+| 6 — Multi-tenant (prod + sandbox) | **137 each** | Two pinned instances side-by-side |
+| 7 — Local development | **137** | Same as default safe + debug logs |
 
 ### Permission groups (legend)
 
@@ -153,8 +153,8 @@ auto-generated catalog.
 | `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
 | `read_jsm_admin` | Jira Service Management | 17 | api_token | Service desks, queues, SLA state, forms — read |
 | `write_jsm_admin` | Jira Service Management | 7 | api_token | Same surface + form templates — create/update/delete |
-| `read_assets` | Assets (JSM add-on) | 11 | oauth | Assets/Insight schemas, types, objects — read |
-| `write_assets` | Assets (JSM add-on) | 10 | oauth | Mutate Assets data and schema |
+| `read_assets` | Assets (JSM add-on) | 10 | oauth | Assets/Insight schemas, types, objects — read |
+| `write_assets` | Assets (JSM add-on) | 13 | oauth | Mutate Assets data and schema |
 | `read_confluence_admin` | Confluence | 6 | api_token | Spaces, templates, blueprints, restrictions — read |
 | `write_confluence_admin` | Confluence | 4 | api_token | Create/update/delete spaces, set restrictions (restrictions need a paid Confluence plan) |
 | `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — **also gated by `GOJIRA_ENABLE_ORG_ADMIN`** |
@@ -175,16 +175,19 @@ Notes:
   **Jira administrator** — a non-admin token gets `403` on every
   automation call. Bind a token created *after* the admin grant; a
   token minted before it keeps its stale permissions.
-- The assets groups are OAuth, not API-token — but they need the eight
+- The assets groups are OAuth, not API-token — but they need the thirteen
   **CMDB granular scopes** (`read:cmdb-object:jira`,
   `write:cmdb-object:jira`, `read:cmdb-schema:jira`,
   `write:cmdb-schema:jira`, `read:cmdb-type:jira`,
   `write:cmdb-type:jira`, `read:cmdb-attribute:jira`,
-  `write:cmdb-attribute:jira`) in `ATLASSIAN_OAUTH_SCOPES` on top of the
-  JSM scopes that workspace discovery uses. Assets also requires a
-  **Premium** JSM plan; on lower plans every Assets call `403`s.
+  `write:cmdb-attribute:jira`, `delete:cmdb-object:jira`,
+  `delete:cmdb-schema:jira`, `delete:cmdb-type:jira`,
+  `delete:cmdb-attribute:jira`, `import:import-configuration:cmdb`) in
+  `ATLASSIAN_OAUTH_SCOPES` on top of the JSM scopes that workspace
+  discovery uses. Assets also requires a **Premium** JSM plan; on lower
+  plans every Assets call `403`s.
 
-### Pattern 1 — Default safe (admin sandbox) · 135 tools
+### Pattern 1 — Default safe (admin sandbox) · 137 tools
 
 Daily admin work, no destructive project deletion, no org-admin path.
 Good starting point for a single team's instance.
@@ -195,7 +198,7 @@ Active groups: `utility`, all 10 `read_*`, all 9 `write_*`, plus
 ```bash
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira delete:cmdb-object:jira delete:cmdb-schema:jira delete:cmdb-type:jira delete:cmdb-attribute:jira import:import-configuration:cmdb
 ATLASSIAN_PINNED_CLOUD_ID=<prod-cloud-id>
 TOKEN_ENCRYPTION_KEY=<base64>
 ALLOWED_ORIGINS=*
@@ -203,7 +206,7 @@ MCP_SERVER_URL=https://gojira.example.com
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
 ```
 
-### Pattern 2 — Read-only audit · 81 tools
+### Pattern 2 — Read-only audit · 80 tools
 
 Only `utility` + every `read_*` group enabled. Useful for compliance
 reviewers, incident investigators, or any flow that must not mutate
@@ -217,7 +220,7 @@ GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,read_assets,read_automation,read_cu
 
 (Same auth/secret/cloud config as Pattern 1.)
 
-### Pattern 3 — JSM/Assets specialist · 52 tools
+### Pattern 3 — JSM/Assets specialist · 54 tools
 
 Service-desk operators who only need JSM and Assets.
 
@@ -225,7 +228,7 @@ Active groups: `utility`, `read_jsm_admin`, `write_jsm_admin`,
 `read_assets`, `write_assets`.
 
 ```bash
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira delete:cmdb-object:jira delete:cmdb-schema:jira delete:cmdb-type:jira delete:cmdb-attribute:jira import:import-configuration:cmdb
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets
 ```
 
@@ -280,7 +283,7 @@ it would let any licensed user act with this deployment's global
 org-admin token. The permitted set is operator-declared and fails
 closed.
 
-### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 135 tools each
+### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 137 tools each
 
 Two instances, same image, two compose stacks, two hostnames:
 
@@ -294,12 +297,12 @@ both cloudIds can connect both as separate connectors in their MCP
 client; site pinning ensures each instance only ever talks to its own
 tenant.
 
-### Pattern 7 — Local development · 135 tools
+### Pattern 7 — Local development · 137 tools
 
 ```bash
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira delete:cmdb-object:jira delete:cmdb-schema:jira delete:cmdb-type:jira delete:cmdb-attribute:jira import:import-configuration:cmdb
 TOKEN_ENCRYPTION_KEY=<base64>
 ALLOWED_ORIGINS=*
 MCP_SERVER_URL=http://localhost:8081

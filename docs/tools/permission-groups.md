@@ -33,8 +33,8 @@ unless it's named.
 | `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
 | `read_jsm_admin` | Jira Service Management | 17 | api_token | List/get for service desks, queues, SLA state, forms, etc. |
 | `write_jsm_admin` | Jira Service Management | 7 | api_token | Create/update/delete for the same surface incl. form templates |
-| `read_assets` | Assets (JSM add-on) | 11 | api_token | Read for Assets/Insight schemas, types, objects |
-| `write_assets` | Assets (JSM add-on) | 10 | api_token | Mutate Assets data and schema |
+| `read_assets` | Assets (JSM add-on) | 10 | oauth | Read for Assets/Insight schemas, types, objects |
+| `write_assets` | Assets (JSM add-on) | 13 | oauth | Mutate Assets data and schema |
 | `read_confluence_admin` | Confluence | 6 | api_token | List/get spaces, templates, blueprints, restrictions |
 | `write_confluence_admin` | Confluence | 4 | api_token | Create/update/delete spaces, set restrictions |
 | `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — gated separately by `GOJIRA_ENABLE_ORG_ADMIN` |
