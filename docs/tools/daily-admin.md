@@ -5,7 +5,7 @@ Assets/Insight CMDB, Jira automation rules, custom fields, and the safe
 project-management surface (create + archive; delete is in its own group
 covered in [schemes-and-workflows.md](schemes-and-workflows.md)).
 
-Roughly 69 tools across 10 permission groups. The auto-generated
+Roughly 71 tools across 10 permission groups. The auto-generated
 [catalog](catalog.md) lists every tool with its full input schema.
 
 ## JSM admin (`read_jsm_admin` / `write_jsm_admin`)
@@ -75,6 +75,7 @@ Assets is a **Premium** JSM feature. On a non-Premium site these tools
 - `assets.getObjectSchema(schemaId)`.
 - `assets.createObjectSchema(name, objectSchemaKey, description?, commit)` — destructive.
 - `assets.updateObjectSchema(schemaId, name?, objectSchemaKey?, description?, commit)` — destructive, revertible.
+- `assets.deleteObjectSchema(schemaId, commit)` — destructive, **irreversible** (deletes the whole schema — types + objects; the full schema definition is captured in the journal, so export it first).
 - `assets.exportAssetSchema(schemaId)` — emits schema + types + attributes as one JSON. Useful as a backup before destructive ops.
 
 ### Object types
@@ -82,11 +83,13 @@ Assets is a **Premium** JSM feature. On a non-Premium site these tools
 - `assets.getObjectType(objectTypeId)`.
 - `assets.createObjectType(schemaId, name, description?, iconId?, inherited?, parentObjectTypeId?, commit)` — destructive.
 - `assets.updateObjectType(objectTypeId, name?, description?, iconId?, commit)` — destructive, revertible.
+- `assets.deleteObjectType(objectTypeId, commit)` — destructive, **irreversible** (deletes the type and its objects; the type definition is captured in the journal).
 
 ### Attributes
 - `assets.getObjectTypeAttributes(objectTypeId)`.
 - `assets.createObjectTypeAttribute(objectTypeId, attribute, commit)` — destructive.
 - `assets.updateObjectTypeAttribute(objectTypeId, attributeId, attribute, commit)` — destructive, revertible. `objectTypeId` is required: it is part of the path, not just a lookup hint.
+- `assets.deleteObjectTypeAttribute(objectTypeId, attributeId, commit)` — destructive, **irreversible** (no single-attribute GET exists, so the journal captures the object type's full attribute list for reconstruction).
 
 ### Objects (data plane)
 - `assets.aqlSearch(qlQuery, page?, resultPerPage?, includeAttributes?)`.
@@ -97,7 +100,6 @@ Assets is a **Premium** JSM feature. On a non-Premium site these tools
 
 ### References & metadata (read-only)
 - `assets.getObjectReferences(objectId)`.
-- `assets.getObjectAttachments(objectId)`.
 - `assets.getObjectHistory(objectId)`.
 
 References are **read-only**. There is no add/remove-reference tool

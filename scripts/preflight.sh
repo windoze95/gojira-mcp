@@ -87,6 +87,14 @@ check_scope write_assets           "write:cmdb-object:jira"
 check_scope write_assets           "write:cmdb-schema:jira"
 check_scope write_assets           "write:cmdb-type:jira"
 check_scope write_assets           "write:cmdb-attribute:jira"
+# Delete tools (assets.deleteObject/deleteObjectSchema/deleteObjectType/
+# deleteObjectTypeAttribute) and assets.startImport are all write-side — gate
+# their granular scopes on write_assets.
+check_scope write_assets           "delete:cmdb-object:jira"
+check_scope write_assets           "delete:cmdb-schema:jira"
+check_scope write_assets           "delete:cmdb-type:jira"
+check_scope write_assets           "delete:cmdb-attribute:jira"
+check_scope write_assets           "import:import-configuration:cmdb"
 # Assets workspace discovery (GET /rest/servicedeskapi/assets/workspace,
 # src/atlassian/assetsWorkspace.ts) runs on the OAuth bearer, so *Assets* — not
 # JSM — is what needs read:servicedesk-request. Checked once for either group.

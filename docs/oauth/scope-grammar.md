@@ -73,15 +73,20 @@ scopes alongside the classic ones where you enable the group:
   API they depend on returns **410 Gone** on the OAuth host (verified live).
   See [api-token-side-channel.md](api-token-side-channel.md).
 - **Assets / CMDB** — every `assets.*` tool authenticates with the OAuth bearer
-  against `api.atlassian.com/jsm/assets/...`. All **eight** granular CMDB scopes
-  are required for the full group (object/schema/type/attribute × read/write):
+  against `api.atlassian.com/jsm/assets/...`. All **thirteen** granular CMDB scopes
+  are required for the full group (object/schema/type/attribute × read/write/delete,
+  plus an import scope):
 
   ```
-  read:cmdb-object:jira     write:cmdb-object:jira
-  read:cmdb-schema:jira     write:cmdb-schema:jira
-  read:cmdb-type:jira       write:cmdb-type:jira
-  read:cmdb-attribute:jira  write:cmdb-attribute:jira
+  read:cmdb-object:jira     write:cmdb-object:jira     delete:cmdb-object:jira
+  read:cmdb-schema:jira     write:cmdb-schema:jira     delete:cmdb-schema:jira
+  read:cmdb-type:jira       write:cmdb-type:jira       delete:cmdb-type:jira
+  read:cmdb-attribute:jira  write:cmdb-attribute:jira  delete:cmdb-attribute:jira
+  import:import-configuration:cmdb
   ```
+
+  The four `delete:cmdb-*` scopes back the `assets.delete*` tools, and
+  `import:import-configuration:cmdb` backs `assets.startImport`.
 
   Plus **`read:servicedesk-request`** — Assets *workspace discovery* calls
   `GET /rest/servicedeskapi/assets/workspace` with the OAuth bearer
