@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: typecheck · tests · build · docs-freshness
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Preflight script syntax
+        run: bash -n scripts/preflight.sh
+
+      - name: Tool catalog is fresh
+        # catalog.md is generated from the live tool registry — regenerating it
+        # must produce no diff, or the docs have drifted from the code.
+        run: |
+          npm run docs:tools
+          git diff --exit-code docs/tools/catalog.md \
+            || { echo "::error::docs/tools/catalog.md is stale — run 'npm run docs:tools' and commit."; exit 1; }
