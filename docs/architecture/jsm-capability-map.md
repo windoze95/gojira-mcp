@@ -32,18 +32,20 @@ Earlier this was listed as "Forge only." That was **wrong** — it failed becaus
 used the wrong credential. Verified live:
 
 - The GA **Automation Rule Management API** (`api.atlassian.com/automation/public/jira/{cloudId}/rest/v1`)
-  authenticates with an **API token used as a Bearer** — NOT OAuth 3LO (a 3LO
-  token gets `401 scope does not match`; there is no automation OAuth scope), and
-  NOT Basic auth (the gateway rejects it).
-- On the real endpoints (from the OpenAPI spec — list is `GET /rule/summary`,
-  get/update/delete are `/rule/{uuid}`, enable/disable is `PUT /rule/{uuid}/state`)
-  the token is **accepted** — responses are 403 (permission), never 401/404.
-- The 403 clears once the token's account is a **Jira administrator**
-  (jira-admins group). Gotcha: create the token **after** granting admin — a
-  token minted earlier carries a stale permission snapshot.
+  is on the `api.atlassian.com` host but authenticates with the per-user **API
+  token via Basic auth** (`email:token`) — the same `api_token` mode the JSM
+  tools use. NOT OAuth 3LO (a 3LO token gets `401 scope does not match`; there is
+  no automation OAuth scope), and NOT the token as a Bearer (→ 403).
+- Verified live against the dev tenant: `GET /rule/summary` → **200**, and writes
+  (`POST /rule`, `POST /rule/manual/search`) → **400 validation** (i.e. authorized,
+  body-dependent) — never 401/404. Endpoints from the OpenAPI spec: list is
+  `GET /rule/summary`, get/update/delete are `/rule/{uuid}`, enable/disable is
+  `PUT /rule/{uuid}/state`.
+- The one requirement: the token's account must be a **Jira administrator** (holds
+  the `ADMINISTER` global permission). A non-admin account 403s on every call.
 
-gojira's `automation.*` tools now use the bound API token as a bearer against the
-correct endpoints. **No Forge app is required.**
+gojira's `automation.*` tools use the bound API token via Basic auth against these
+endpoints. **No Forge app is required.**
 
 ## ❌ NOT reachable by any credential (UI-only)
 

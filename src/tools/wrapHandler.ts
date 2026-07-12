@@ -417,13 +417,14 @@ function makeClientFactories(opts: {
     },
     automation: () => {
       if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
-      // The Automation Rule Management API authenticates with an API TOKEN used
-      // as a Bearer (NOT OAuth 3LO — there is no automation OAuth scope). The
-      // bound per-user API token is passed as the bearer. The token's account
-      // must be a Jira administrator.
+      // The GA Automation Rule Management API is on the api.atlassian.com host but
+      // authenticates with the per-user API token via **Basic auth** (email:token)
+      // — verified live: Basic → 200/400, while the same token as a Bearer (and
+      // OAuth 3LO, which has no automation scope) → 403. The token's account must
+      // be a Jira administrator (ADMINISTER global permission).
       return new AtlassianClient({
         baseURL: automationBase(cloudId),
-        auth: { bearer: apiTokenAuth().token },
+        auth: { apiToken: apiTokenAuth() },
         onCallMeta,
       });
     },

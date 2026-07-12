@@ -11,15 +11,13 @@ import { reverters } from "../../operations/revert.js";
  * (ctx.client.automation()). The old code targeted /rest/cb-automation, a Jira
  * Data Center internal path absent on Cloud.
  *
- * AUTH (verified): this API authenticates with an **API token used as a Bearer**
- * — NOT OAuth 3LO (no automation OAuth scope exists; a 3LO token gets
- * `401 scope does not match`), and NOT Basic auth (the api.atlassian gateway
- * rejects it). These tools therefore use the bound per-user API token
- * (`gojira.bindApiToken`) as the bearer. Two requirements:
- *   1. The token's account must be a **Jira administrator** (member of the
- *      jira-admins group) — otherwise every call returns 403.
- *   2. Create the token AFTER granting admin; a scoped token created earlier can
- *      carry a stale permission snapshot.
+ * AUTH (verified live): this API is on the api.atlassian.com host but
+ * authenticates with the per-user API token via **Basic auth** (email:token) —
+ * the same `api_token` mode gojira's JSM tools use. Confirmed against the dev
+ * tenant: Basic → 200 (list) / 400 (write validation), whereas the same token as
+ * a Bearer → 403, and OAuth 3LO → 401 (no automation scope exists). One
+ * requirement: the token's account must be a **Jira administrator** (holds the
+ * ADMINISTER global permission) — otherwise every call returns 403.
  * Endpoints below are the real ones from the Automation OpenAPI spec (rule
  * listing is `/rule/summary`, enable/disable is `PUT /rule/{uuid}/state`).
  */
