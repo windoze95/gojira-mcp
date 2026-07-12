@@ -152,12 +152,14 @@ These capabilities have **no public Atlassian Cloud REST API**, so there are no
 tools for them (earlier versions shipped tools that 404'd — those were removed):
 
 - JSM **SLA configuration**, **queue** create/update/delete, **portal**
-  announcements/branding, **Forms** (a separate product API), knowledge-base
-  **linking**. (SLA *state* per request and KB article *search* are available.)
+  announcements/branding, knowledge-base **linking**. (SLA *state* per request
+  and KB article *search* are available.)
 - Org-level **Marketplace app** management, **domain verification**, **Rovo MCP**
   settings.
 
-(Jira **automation** CRUD *is* available — not via OAuth, but through the bound
+(Jira **Forms** *is* available — the `forms.*` tools ride the same bound API
+token as JSM admin, no extra scope. Jira **automation** CRUD *is* available —
+not via OAuth, but through the bound
 API token; see §3 and `docs/architecture/jsm-capability-map.md`.)
 
 ## 12. Org-admin tools (optional, isolated)

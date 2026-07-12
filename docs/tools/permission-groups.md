@@ -31,8 +31,8 @@ unless it's named.
 | `write_filters_dashboards` | Jira | 6 | oauth | Create/update/delete filters and dashboards |
 | `read_agile` | Jira Software | 6 | oauth | Boards, sprints, epics — read |
 | `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
-| `read_jsm_admin` | Jira Service Management | 12 | api_token | List/get for service desks, queues, SLAs, portals, etc. |
-| `write_jsm_admin` | Jira Service Management | 4 | api_token | Create/update/delete for the same surface |
+| `read_jsm_admin` | Jira Service Management | 17 | api_token | List/get for service desks, queues, SLA state, forms, etc. |
+| `write_jsm_admin` | Jira Service Management | 7 | api_token | Create/update/delete for the same surface incl. form templates |
 | `read_assets` | Assets (JSM add-on) | 11 | api_token | Read for Assets/Insight schemas, types, objects |
 | `write_assets` | Assets (JSM add-on) | 10 | api_token | Mutate Assets data and schema |
 | `read_confluence_admin` | Confluence | 6 | oauth | List/get spaces, templates, blueprints, restrictions |

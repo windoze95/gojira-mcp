@@ -246,6 +246,11 @@ export function adminBase(): string {
 export function automationBase(cloudId: string): string {
   return `${ATLASSIAN_API_HOST}/automation/public/jira/${cloudId}/rest/v1`;
 }
+export function formsBase(cloudId: string): string {
+  // The Jira Forms (ProForma) API's Basic-auth host — verified live with the
+  // per-user API token (the OAuth host is /ex/jira/{cloudId}/forms).
+  return `${ATLASSIAN_API_HOST}/jira/forms/cloud/${cloudId}`;
+}
 export function atlassianApiBase(): string {
   return ATLASSIAN_API_HOST;
 }

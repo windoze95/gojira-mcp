@@ -19,7 +19,7 @@ session, not as a replacement.
 | **Transport** | StreamableHTTP, per-session in-memory |
 | **Auth** | OAuth 2.1 to MCP clients; OAuth 2.0 3LO to Atlassian; per-user API token side-channel; org-admin API token (separate gate) |
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
-| **Tool count** | 145 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
+| **Tool count** | 153 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
 | **Tests** | 55 unit tests covering auth, consent, journal, rate-limiting, retry, org-admin gate, and site-pinning paths |
 
 ---
@@ -113,13 +113,13 @@ name. Lower is better for model selection accuracy — see
 
 | Pattern | Tool count | Use case |
 |---|---|---|
-| 1 — Default safe (admin sandbox) | **127** | Single team's daily admin instance |
-| 2 — Read-only audit | **76** | Compliance / forensic review |
-| 3 — JSM/Assets specialist | **44** | Service-desk operators |
+| 1 — Default safe (admin sandbox) | **135** | Single team's daily admin instance |
+| 2 — Read-only audit | **81** | Compliance / forensic review |
+| 3 — JSM/Assets specialist | **52** | Service-desk operators |
 | 4 — Schemes/workflows admin | **63** | Jira config-changes only |
 | 5 — Org-admin (separate host) | **24** | `admin.atlassian.com` only |
-| 6 — Multi-tenant (prod + sandbox) | **127 each** | Two pinned instances side-by-side |
-| 7 — Local development | **127** | Same as default safe + debug logs |
+| 6 — Multi-tenant (prod + sandbox) | **135 each** | Two pinned instances side-by-side |
+| 7 — Local development | **135** | Same as default safe + debug logs |
 
 ### Permission groups (legend)
 
@@ -149,8 +149,8 @@ auto-generated catalog.
 | `write_filters_dashboards` | Jira | 6 | oauth | Create/update/delete filters and dashboards |
 | `read_agile` | Jira Software | 6 | oauth | Boards, sprints, epics — read |
 | `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
-| `read_jsm_admin` | Jira Service Management | 12 | api_token | Service desks, queues, SLAs, portals — read |
-| `write_jsm_admin` | Jira Service Management | 4 | api_token | Same surface — create/update/delete |
+| `read_jsm_admin` | Jira Service Management | 17 | api_token | Service desks, queues, SLA state, forms — read |
+| `write_jsm_admin` | Jira Service Management | 7 | api_token | Same surface + form templates — create/update/delete |
 | `read_assets` | Assets (JSM add-on) | 11 | api_token | Assets/Insight schemas, types, objects — read |
 | `write_assets` | Assets (JSM add-on) | 10 | api_token | Mutate Assets data and schema |
 | `read_confluence_admin` | Confluence | 6 | oauth | Spaces, templates, blueprints, restrictions — read |
@@ -174,7 +174,7 @@ Notes:
   automation call. Bind a token created *after* the admin grant; a
   token minted before it keeps its stale permissions.
 
-### Pattern 1 — Default safe (admin sandbox) · 127 tools
+### Pattern 1 — Default safe (admin sandbox) · 135 tools
 
 Daily admin work, no destructive project deletion, no org-admin path.
 Good starting point for a single team's instance.
@@ -193,7 +193,7 @@ MCP_SERVER_URL=https://gojira.example.com
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
 ```
 
-### Pattern 2 — Read-only audit · 76 tools
+### Pattern 2 — Read-only audit · 81 tools
 
 Only `utility` + every `read_*` group enabled. Useful for compliance
 reviewers, incident investigators, or any flow that must not mutate
@@ -207,7 +207,7 @@ GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,read_assets,read_automation,read_cu
 
 (Same auth/secret/cloud config as Pattern 1.)
 
-### Pattern 3 — JSM/Assets specialist · 44 tools
+### Pattern 3 — JSM/Assets specialist · 52 tools
 
 Service-desk operators who only need JSM and Assets.
 
@@ -259,7 +259,7 @@ Caller verification still requires the calling user to be an org admin
 on the Atlassian side; non-admins get `INSUFFICIENT_PERMISSIONS` even
 on this instance.
 
-### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 127 tools each
+### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 135 tools each
 
 Two instances, same image, two compose stacks, two hostnames:
 
@@ -273,7 +273,7 @@ both cloudIds can connect both as separate connectors in their MCP
 client; site pinning ensures each instance only ever talks to its own
 tenant.
 
-### Pattern 7 — Local development · 127 tools
+### Pattern 7 — Local development · 135 tools
 
 ```bash
 ATLASSIAN_OAUTH_CLIENT_ID=...

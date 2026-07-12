@@ -11,6 +11,7 @@ import {
   adminBase,
   assetsBase,
   automationBase,
+  formsBase,
 } from "../atlassian/client.js";
 import { AtlassianApiError, mapAtlassianError } from "../atlassian/errors.js";
 import { ApiTokenStore } from "../auth/apiTokenStore.js";
@@ -342,6 +343,22 @@ function makeClientFactories(opts: {
     return t;
   };
 
+  // For api-token clients whose base URL embeds the cloudId (automation, forms):
+  // require a resolved cloudId, and fail closed when the bound token belongs to
+  // a different site — API tokens are account-global, so on an unpinned
+  // deployment the call would otherwise silently hit the wrong tenant.
+  const requireApiTokenTenant = (): string => {
+    if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
+    const boundCloudId = credentials.apiToken?.cloud_id ?? null;
+    if (boundCloudId && boundCloudId !== cloudId) {
+      throw new ToolError(
+        "VALIDATION_ERROR",
+        "The bound API token belongs to a different cloudId than this call resolves to. Re-bind the token for this site or pin the cloudId.",
+      );
+    }
+    return cloudId;
+  };
+
   const apiTokenAuth = (): { email: string; token: string } => {
     const a = credentials.apiToken;
     if (!a) throw new AuthRequiredError("API token required but not bound", { bind_tool: "gojira.bindApiToken" });
@@ -416,24 +433,22 @@ function makeClientFactories(opts: {
       });
     },
     automation: () => {
-      if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
       // The GA Automation Rule Management API is on the api.atlassian.com host but
       // authenticates with the per-user API token via **Basic auth** (email:token)
       // — verified live: Basic → 200/400, the same token as a Bearer → 403, and
       // OAuth 3LO → 401 (no automation scope exists). The token's account must
       // be a Jira administrator (ADMINISTER global permission).
-      const boundCloudId = credentials.apiToken?.cloud_id ?? null;
-      if (boundCloudId && boundCloudId !== cloudId) {
-        // Unpinned deployments: the base URL targets `cloudId` while the token
-        // may be bound to another site. API tokens are account-global, so the
-        // call would silently succeed against the wrong tenant — fail closed.
-        throw new ToolError(
-          "VALIDATION_ERROR",
-          "The bound API token belongs to a different cloudId than this call resolves to. Re-bind the token for this site or pin the cloudId.",
-        );
-      }
       return new AtlassianClient({
-        baseURL: automationBase(cloudId),
+        baseURL: automationBase(requireApiTokenTenant()),
+        auth: { apiToken: apiTokenAuth() },
+        onCallMeta,
+      });
+    },
+    forms: () => {
+      // Jira Forms (ProForma) — Basic-auth host, verified live with the
+      // per-user API token (full template lifecycle 200s).
+      return new AtlassianClient({
+        baseURL: formsBase(requireApiTokenTenant()),
         auth: { apiToken: apiTokenAuth() },
         onCallMeta,
       });

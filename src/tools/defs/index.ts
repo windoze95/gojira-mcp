@@ -1,6 +1,7 @@
 import type { AnyToolDef } from "./defineTool.js";
 import { utilityTools } from "./utility.js";
 import { jsmTools } from "./jsm.js";
+import { formsTools } from "./forms.js";
 import { assetsTools } from "./assets.js";
 import { automationTools } from "./automation.js";
 import { customFieldTools } from "./customfields.js";
@@ -17,6 +18,7 @@ export function allTools(): AnyToolDef[] {
   return [
     ...utilityTools(),
     ...jsmTools(),
+    ...formsTools(),
     ...assetsTools(),
     ...automationTools(),
     ...customFieldTools(),
