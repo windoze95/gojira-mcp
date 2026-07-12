@@ -23,14 +23,25 @@ docker compose up -d
 
 This brings up:
 
-| Service | Container | Network | Ports |
-|---|---|---|---|
-| `gojira-mcp` | `gojira-mcp` | `internal` | `8081:8081` |
-| `redis` | `gojira-redis` | `internal` | `expose: 6379` (not published) |
+| Service | Network | Ports |
+|---|---|---|
+| `gojira-mcp` | `internal` | `127.0.0.1:8081:8081` (loopback only — front it with TLS) |
+| `redis` | `internal` | `expose: 6379` (not published) |
 
-`gojira-mcp` is health-gated on Redis (`depends_on:
-service_healthy`). The Redis container is bounded at 256 MB, uses
-`allkeys-lru` eviction, and `--appendonly yes` for durability.
+Compose sets no `container_name`, so containers are named
+`<project>-<service>-1` — `gojira-mcp-redis-1` with the default project
+name (the directory), or `gojira-prod-redis-1` / `gojira-nonprod-redis-1`
+under the `-p` project names the [deploy profiles](../../deploy) use.
+Address containers through `docker compose exec <service>` rather than a
+hard-coded name and the commands work under any project name.
+
+`gojira-mcp` is health-gated on Redis (`depends_on: service_healthy`).
+The Redis container is bounded at **512 MB** with **`noeviction`** and
+`--appendonly yes`. `noeviction` is deliberate: this store holds the
+encrypted OAuth tokens, the API-token bindings, and the operation
+journal, so under memory pressure it must fail writes loudly rather than
+silently evict credentials or the audit trail. Do not "tune" it to
+`allkeys-lru`.
 
 ## TLS via Caddy overlay
 
@@ -41,9 +52,9 @@ docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
 
 Adds:
 
-| Service | Container | Ports |
-|---|---|---|
-| `caddy` | `gojira-caddy` | `80:80`, `443:443`, `443:443/udp` (HTTP/3) |
+| Service | Ports |
+|---|---|
+| `caddy` | `80:80`, `443:443`, `443:443/udp` (HTTP/3) |
 
 The overlay **unbinds** gojira-mcp's host port 8081 — only Caddy is
 publicly reachable. Caddy obtains a Let's Encrypt cert for
@@ -98,15 +109,29 @@ per day:
 
 - gojira-mcp Node process: not memory-bounded by the container; in
   practice ~200-400 MB resident.
-- Redis: `--maxmemory 256mb`, `allkeys-lru`.
+- Redis: `--maxmemory 512mb`, `--maxmemory-policy noeviction`.
 
 If the operation journal pressures Redis (workflow + scheme snapshots
-can be 100 KB+), raise the cap to 512 MB or higher. Watch with:
+can be 100 KB+), raise `--maxmemory` — never relax the eviction policy.
+With `noeviction`, a full store rejects writes (`OOM command not allowed`)
+instead of quietly dropping tokens or journal entries, so alert on
+`used_memory` well before the cap. Watch it with:
 
 ```bash
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-    INFO memory | grep used_memory_human
+# default project name (the checkout directory)
+docker compose exec redis \
+    sh -c 'redis-cli -a "$REDIS_PASSWORD" INFO memory | grep used_memory_human'
+
+# a named deploy profile
+docker compose -p gojira-prod --env-file .env.prod \
+    -f docker-compose.yml -f docker-compose.caddy.yml \
+    exec redis \
+    sh -c 'redis-cli -a "$REDIS_PASSWORD" INFO memory | grep used_memory_human'
 ```
+
+`REDIS_PASSWORD` is already in the Redis container's environment, so the
+inner single-quoted `$REDIS_PASSWORD` expands there — you don't need it
+exported on the host.
 
 ## Restart policy
 

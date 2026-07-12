@@ -20,7 +20,7 @@ session, not as a replacement.
 | **Auth** | OAuth 2.1 to MCP clients; OAuth 2.0 3LO to Atlassian; per-user API token side-channel; org-admin API token (separate gate) |
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
 | **Tool count** | 153 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
-| **Tests** | 55 unit tests covering auth, consent, journal, rate-limiting, retry, org-admin gate, and site-pinning paths |
+| **Tests** | 66 unit tests across 13 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, and site-pinning paths — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
 
 ---
 
@@ -93,10 +93,12 @@ Then point an MCP client (Claude Desktop, VS Code chat, Claude Code, Cursor)
 at `https://<host>/mcp`. The client will discover the OAuth endpoints, walk
 the consent flow with you against Atlassian, and start calling tools.
 
-For first-time setup of the JSM, Assets, and automation tools, call
-`gojira.bindApiToken` once to attach a per-user Atlassian API token.
+For first-time setup of the JSM, Confluence-admin, and automation tools,
+call `gojira.bindApiToken` once to attach a per-user Atlassian API token.
 (The automation tools additionally require that token's account be a
-Jira administrator.)
+Jira administrator.) The Assets tools do *not* use the API token — they
+ride OAuth and need the CMDB granular scopes in
+`ATLASSIAN_OAUTH_SCOPES`.
 
 ---
 
@@ -151,8 +153,8 @@ auto-generated catalog.
 | `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
 | `read_jsm_admin` | Jira Service Management | 17 | api_token | Service desks, queues, SLA state, forms — read |
 | `write_jsm_admin` | Jira Service Management | 7 | api_token | Same surface + form templates — create/update/delete |
-| `read_assets` | Assets (JSM add-on) | 11 | api_token | Assets/Insight schemas, types, objects — read |
-| `write_assets` | Assets (JSM add-on) | 10 | api_token | Mutate Assets data and schema |
+| `read_assets` | Assets (JSM add-on) | 11 | oauth | Assets/Insight schemas, types, objects — read |
+| `write_assets` | Assets (JSM add-on) | 10 | oauth | Mutate Assets data and schema |
 | `read_confluence_admin` | Confluence | 6 | api_token | Spaces, templates, blueprints, restrictions — read |
 | `write_confluence_admin` | Confluence | 4 | api_token | Create/update/delete spaces, set restrictions (restrictions need a paid Confluence plan) |
 | `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — **also gated by `GOJIRA_ENABLE_ORG_ADMIN`** |
@@ -173,6 +175,14 @@ Notes:
   **Jira administrator** — a non-admin token gets `403` on every
   automation call. Bind a token created *after* the admin grant; a
   token minted before it keeps its stale permissions.
+- The assets groups are OAuth, not API-token — but they need the eight
+  **CMDB granular scopes** (`read:cmdb-object:jira`,
+  `write:cmdb-object:jira`, `read:cmdb-schema:jira`,
+  `write:cmdb-schema:jira`, `read:cmdb-type:jira`,
+  `write:cmdb-type:jira`, `read:cmdb-attribute:jira`,
+  `write:cmdb-attribute:jira`) in `ATLASSIAN_OAUTH_SCOPES` on top of the
+  JSM scopes that workspace discovery uses. Assets also requires a
+  **Premium** JSM plan; on lower plans every Assets call `403`s.
 
 ### Pattern 1 — Default safe (admin sandbox) · 135 tools
 
@@ -185,7 +195,7 @@ Active groups: `utility`, all 10 `read_*`, all 9 `write_*`, plus
 ```bash
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
 ATLASSIAN_PINNED_CLOUD_ID=<prod-cloud-id>
 TOKEN_ENCRYPTION_KEY=<base64>
 ALLOWED_ORIGINS=*
@@ -215,7 +225,7 @@ Active groups: `utility`, `read_jsm_admin`, `write_jsm_admin`,
 `read_assets`, `write_assets`.
 
 ```bash
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work read:servicedesk-request write:servicedesk-request manage:servicedesk-customer
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets
 ```
 
@@ -251,13 +261,24 @@ ATLASSIAN_PINNED_CLOUD_ID=<prod-cloud-id>
 GOJIRA_ENABLE_ORG_ADMIN=true
 GOJIRA_ORG_ADMIN_TOKEN=<admin.atlassian.com api token>
 GOJIRA_ORG_ID=<your-org-id>
+GOJIRA_ORG_ADMIN_ACCOUNT_IDS=<accountId>,<accountId>
 GOJIRA_ORG_ADMIN_AUDIT_LOG_TARGET=file:/var/log/gojira/org-admin.log
 GOJIRA_ENABLED_GROUPS=utility,admin_org
 ```
 
-Caller verification still requires the calling user to be an org admin
-on the Atlassian side; non-admins get `INSUFFICIENT_PERMISSIONS` even
-on this instance.
+All four `GOJIRA_ORG_*` values above are **required** when
+`GOJIRA_ENABLE_ORG_ADMIN=true` — `src/config.ts` refuses to start
+otherwise, including on an empty `GOJIRA_ORG_ADMIN_ACCOUNT_IDS`.
+
+Caller verification is that allowlist: `admin_org` tools only run for a
+caller whose Atlassian accountId is listed in
+`GOJIRA_ORG_ADMIN_ACCOUNT_IDS`; everyone else gets
+`INSUFFICIENT_PERMISSIONS`. The server deliberately does **not** ask
+Atlassian whether the caller is an org admin — the org user API returns
+every managed account in the org, not just admins, so checking against
+it would let any licensed user act with this deployment's global
+org-admin token. The permitted set is operator-declared and fails
+closed.
 
 ### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 135 tools each
 
@@ -278,7 +299,7 @@ tenant.
 ```bash
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
 TOKEN_ENCRYPTION_KEY=<base64>
 ALLOWED_ORIGINS=*
 MCP_SERVER_URL=http://localhost:8081
@@ -341,6 +362,7 @@ NODE_ENV=development
 ### Development
 - [Repo layout](docs/development/repo-layout.md)
 - [Testing](docs/development/testing.md)
+- [Battle-testing (live e2e)](docs/development/battle-testing.md)
 - [Adding a tool](docs/development/adding-a-tool.md)
 
 ### Reference

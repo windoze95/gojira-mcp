@@ -25,6 +25,20 @@ function org(ctx: import("../types.js").ToolContext): string {
   return o;
 }
 
+/**
+ * DELIBERATE: no org-admin tool registers a reverter, and every mutating tool
+ * here journals `revertible: false`.
+ *
+ * `gojira.revertOperation` lives in the `utility` permission group, so ANY
+ * caller can invoke it. A reverter registered for an `admin_org` tool would
+ * therefore be an inverse org-admin mutation reachable WITHOUT the admin_org
+ * gate (GOJIRA_ENABLE_ORG_ADMIN + the GOJIRA_ORG_ADMIN_ACCOUNT_IDS allowlist) —
+ * a non-admin could restore a user an admin deactivated, re-add themselves to a
+ * group they were removed from, or roll back an org policy. That is privilege
+ * escalation, so these ops are undone only by calling the corresponding
+ * org-admin tool, which IS gated. Each `revertHint` names that tool.
+ */
+
 export const orgAdminTools = (): AnyToolDef[] => [
   // ---- Users ----
   defineTool({
@@ -117,8 +131,9 @@ export const orgAdminTools = (): AnyToolDef[] => [
         target: { kind: "org_user", id: input.accountId },
         before: before.data,
         request: { accountId: input.accountId } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call restoreUser on the same accountId.",
+        revertible: false,
+        revertHint:
+          "Not auto-revertible (revertOperation is not org-admin gated). Call orgAdmin.restoreUser with the same accountId.",
         run: async () => {
           await c.post<unknown>(`/orgs/${org(ctx)}/directory/users/${encodeURIComponent(input.accountId)}/suspend-access`);
           return { deactivated: input.accountId };
@@ -152,8 +167,9 @@ export const orgAdminTools = (): AnyToolDef[] => [
         target: { kind: "org_user", id: input.accountId },
         before: before.data,
         request: { accountId: input.accountId } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call deactivateUser on the same accountId.",
+        revertible: false,
+        revertHint:
+          "Not auto-revertible (revertOperation is not org-admin gated). Call orgAdmin.deactivateUser with the same accountId.",
         run: async () => {
           await c.post<unknown>(`/orgs/${org(ctx)}/directory/users/${encodeURIComponent(input.accountId)}/restore-access`);
           return { restored: input.accountId };
@@ -201,8 +217,9 @@ export const orgAdminTools = (): AnyToolDef[] => [
         target: { kind: "org_group_membership", id: input.groupId, parent: input.accountId },
         before: null,
         request: { accountId: input.accountId, groupId: input.groupId } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call removeUserFromGroup with the same pair.",
+        revertible: false,
+        revertHint:
+          "Not auto-revertible (revertOperation is not org-admin gated). Call orgAdmin.removeUserFromGroup with the same accountId and groupId.",
         run: async () => {
           await ctx.client
             .admin()
@@ -239,8 +256,9 @@ export const orgAdminTools = (): AnyToolDef[] => [
         target: { kind: "org_group_membership", id: input.groupId, parent: input.accountId },
         before: { accountId: input.accountId, groupId: input.groupId },
         request: { accountId: input.accountId, groupId: input.groupId } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call addUserToGroup with the same pair.",
+        revertible: false,
+        revertHint:
+          "Not auto-revertible (revertOperation is not org-admin gated). Call orgAdmin.addUserToGroup with the same accountId and groupId.",
         run: async () => {
           await ctx.client
             .admin()
@@ -304,8 +322,9 @@ export const orgAdminTools = (): AnyToolDef[] => [
         target: { kind: "org_group", name: input.name },
         before: null,
         request: body as Record<string, unknown>,
-        revertible: true,
-        revertHint: "DELETE the created group id.",
+        revertible: false,
+        revertHint:
+          "Not auto-revertible (revertOperation is not org-admin gated). Call orgAdmin.deleteGroup with the created group id (see the journal `after` payload).",
         run: async () => {
           const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/directory/groups`, body);
           return resp.data;
@@ -392,8 +411,9 @@ export const orgAdminTools = (): AnyToolDef[] => [
         target: { kind: "org_policy", id: input.policyId },
         before: before.data,
         request: { policyId: input.policyId, body: input.body } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "PUT the captured `before` payload back to this policy id.",
+        revertible: false,
+        revertHint:
+          "Not auto-revertible (revertOperation is not org-admin gated). Call orgAdmin.setOrgPolicy with the same policyId and the captured `before` payload as `body`.",
         run: async () => {
           const resp = await c.put<unknown>(`/orgs/${org(ctx)}/policies/${encodeURIComponent(input.policyId)}`, input.body);
           return resp.data;

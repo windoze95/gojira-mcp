@@ -62,9 +62,11 @@ async function main(): Promise<void> {
     }, SHUTDOWN_HARD_TIMEOUT_MS);
     hardTimer.unref?.();
 
-    // 1. Stop accepting new connections.
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    logger.info("HTTP listener closed");
+    // 1. Stop accepting new connections. server.close() only resolves once every
+    //    live connection has ended, and long-lived MCP/SSE streams keep theirs
+    //    open indefinitely — so start the close now and await it in step 3,
+    //    AFTER the transports are gone. Awaiting it here deadlocks.
+    const httpClosed = new Promise<void>((resolve) => server.close(() => resolve()));
 
     // 2. Close MCP sessions/transports so in-flight streams and their
     //    journal/audit writes finish rather than being killed mid-write.
@@ -75,7 +77,13 @@ async function main(): Promise<void> {
       logger.warn({ err: err instanceof Error ? err.message : String(err) }, "session shutdown failed");
     }
 
-    // 3. Close Redis last.
+    // 3. The streams are torn down; drop idle keep-alive sockets so the
+    //    listener can actually finish closing.
+    server.closeIdleConnections();
+    await httpClosed;
+    logger.info("HTTP listener closed");
+
+    // 4. Close Redis last.
     try {
       await redis.quit();
     } catch (err) {

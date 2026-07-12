@@ -53,15 +53,18 @@ The caller is identified but doesn't have what's needed.
 | Scenario | `details` |
 |---|---|
 | Tool's group not listed in `GOJIRA_ENABLED_GROUPS` | n/a |
-| `admin_org` tool without `GOJIRA_ENABLE_ORG_ADMIN=true` | n/a |
-| `admin_org` tool but caller is not in the org admin list | `{ hint: "Org admin tools require the caller's accountId to appear in /admin/v1/orgs/<orgId>/users?role=admin" }` |
+| `admin_org` tool without `GOJIRA_ENABLE_ORG_ADMIN=true` | n/a — message is *"Org admin tools are not enabled on this instance"* |
+| `admin_org` tool but caller's accountId is not on the `GOJIRA_ORG_ADMIN_ACCOUNT_IDS` allowlist | `{ hint: "Add the caller's Atlassian accountId to GOJIRA_ORG_ADMIN_ACCOUNT_IDS." }` |
 | Site pinning mismatch (cloudId not accessible) | `{ pinned: "...", accessible: [...] }` |
 | API token bound to a different cloudId than pinned | `{ pinned: "...", api_token_cloud_id: "..." }` |
 | Atlassian 403 with "permission" in body | `{ upstream: [...] }` |
 
 **Caller action:** request the right scopes at `/authorize`, or have the
 caller's permissions escalated. For pinning errors, use the correctly
-pinned instance for that cloud.
+pinned instance for that cloud. For the `admin_org` gate, escalation is
+an **operator** action — the accountId must be added to
+`GOJIRA_ORG_ADMIN_ACCOUNT_IDS` and the instance restarted; changing the
+caller's role at admin.atlassian.com has no effect on this gate.
 
 ### `NOT_FOUND`
 
@@ -124,7 +127,6 @@ the action is idempotent.
 | 400 | `VALIDATION_ERROR` |
 | 401 (after refresh attempt) | `AUTH_EXPIRED` |
 | 403 (general) | `INSUFFICIENT_PERMISSIONS` |
-| 403 (admin_org context) | `INSUFFICIENT_PERMISSIONS` with org-admin hint |
 | 404, 410 | `NOT_FOUND` |
 | 409 | `VALIDATION_ERROR` with `conflict: true` |
 | 429 (after retries) | `RATE_LIMITED` |

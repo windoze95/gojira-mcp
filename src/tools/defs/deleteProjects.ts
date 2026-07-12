@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
 import { buildDeleteDryRun } from "../../consent/dryRun.js";
+import { reverters } from "../../operations/revert.js";
 
 /**
  * Isolated permission group `delete_projects` — separate from
@@ -66,3 +67,23 @@ export const deleteProjectTools = (): AnyToolDef[] => [
     },
   }),
 ];
+
+// Reverting a trash-delete = restore it from the trash. Only a move-to-trash
+// (permanent:false => enableUndo=true) is restorable, so the delete mode is
+// journaled in `request.permanent` and re-checked here: a permanent hard-delete
+// is never revertible and must fail loudly rather than 404 against /restore.
+reverters.register("projects.deleteJiraProject", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const req = entry.request as { project?: string; permanent?: boolean } | null;
+  if (req?.permanent === true) {
+    throw new Error(
+      "Cannot revert: this project was PERMANENTLY deleted (permanent:true), not moved to trash. There is no programmatic undo — restore from backup if available.",
+    );
+  }
+  const project = req?.project ?? (entry.target as { id?: string }).id;
+  if (!project) throw new Error("Cannot revert: project key or id missing from the journal entry.");
+  const resp = await ctx.client
+    .jira()
+    .post<unknown>(`/rest/api/3/project/${encodeURIComponent(project)}/restore`);
+  return { restored: project, response: resp.data };
+});

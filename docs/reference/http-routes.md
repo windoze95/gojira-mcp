@@ -37,7 +37,7 @@ Every route mounted by gojira-mcp, with auth requirements and behaviour.
 
 ```
 1. helmet()                      — secure default headers (HSTS, X-Frame-Options, etc.)
-2. cors({ origin })              — ALLOWED_ORIGINS allowlist; '*' permitted
+2. cors({ origin })              — ALLOWED_ORIGINS allowlist; '*' permitted (credentials off when '*')
 3. express.json({ limit: 1mb })
 4. express.urlencoded({ ... })
 5. GET /health                   — terminates the chain; never reaches /mcp routes
@@ -56,8 +56,12 @@ Every route mounted by gojira-mcp, with auth requirements and behaviour.
   bearer auth still gates `/mcp`)
 - comma-separated list of exact origin strings — case-sensitive matches
 
-`credentials: true` is set; clients can pass cookies, but gojira-mcp
-never reads or sets any.
+`credentials` is **conditional** on that value (`src/server.ts`): it is
+`true` for an explicit origin allowlist, and `false` whenever
+`ALLOWED_ORIGINS` contains `*` — a wildcard origin with credentials is
+rejected by browsers anyway, so the server never advertises the
+combination. Either way gojira-mcp never reads or sets a cookie; `/mcp`
+is gated by the `Authorization` bearer.
 
 ## Error responses
 

@@ -278,8 +278,26 @@ export const utilityTools = (): AnyToolDef[] => [
       if (!reverter) {
         throw new ValidationError(`No reverter registered for tool '${entry.tool}'.`);
       }
-      const result = await reverter(entry, ctx);
-      return { reverted: true, result, original_op_id: entry.opId };
+      // The revert is itself a mutation, so it gets its own journal entry: same
+      // target as the original op, with the original's after-state as `before`.
+      // Not revertible — we do not auto-support reverting a revert.
+      const revertEntry = await ctx.journalOp({
+        accountId: ctx.accountId,
+        tool: "gojira.revertOperation",
+        cloudId: ctx.cloudId,
+        target: entry.target,
+        before: entry.after,
+        request: { op_id: entry.opId, original_tool: entry.tool },
+        revertible: false,
+        revertHint: `Undoes ${entry.tool} (op ${entry.opId}). Re-apply by invoking that tool again.`,
+        run: async () => reverter(entry, ctx),
+      });
+      return {
+        reverted: true,
+        result: revertEntry.after,
+        journal_id: revertEntry.opId,
+        original_op_id: entry.opId,
+      };
     },
   }),
 ];

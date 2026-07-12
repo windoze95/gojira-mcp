@@ -147,6 +147,7 @@ local key = KEYS[1]
 local now_ms = tonumber(ARGV[1])
 local extra_deduct = tonumber(ARGV[2])
 local reset_floor_until_ms = tonumber(ARGV[3])
+local window_sec = tonumber(ARGV[4])
 local data = redis.call('HMGET', key, 'tokens', 'last_refill_ms', 'reset_floor_until_ms')
 local tokens = tonumber(data[1])
 local last = tonumber(data[2])
@@ -160,6 +161,9 @@ if needs_init == 1 then
   -- Don't touch tokens (let the next checkLimit initialise to capacity).
   redis.call('HSET', key, 'reset_floor_until_ms', existing_floor)
   if last == nil then redis.call('HSET', key, 'last_refill_ms', now_ms) end
+  -- This branch CREATES the key, so it must expire it like checkLimit does —
+  -- otherwise every account that only ever gets feedback leaks a TTL-less key.
+  redis.call('EXPIRE', key, window_sec * 2)
   return 1
 end
 if extra_deduct ~= nil and extra_deduct > 0 then
@@ -167,6 +171,7 @@ if extra_deduct ~= nil and extra_deduct > 0 then
   if tokens < 0 then tokens = 0 end
 end
 redis.call('HSET', key, 'tokens', tokens, 'reset_floor_until_ms', existing_floor)
+redis.call('EXPIRE', key, window_sec * 2)
 return 1
 `;
       const floorMs =
@@ -180,6 +185,7 @@ return 1
         Date.now().toString(),
         (opts.extraDeduct ?? 0).toString(),
         floorMs.toString(),
+        this.cfg.windowSec.toString(),
       );
     } catch (err) {
       logger.warn(

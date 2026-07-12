@@ -4,6 +4,7 @@ import type { AnyToolDef } from "./defineTool.js";
 import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
 import { getAssetsWorkspaceId } from "../../atlassian/assetsWorkspace.js";
 import { ToolError } from "../../middleware/errorHandler.js";
+import { reverters } from "../../operations/revert.js";
 
 /**
  * Assets (Insight) — OAuth bearer + CMDB scopes.
@@ -652,3 +653,117 @@ export const assetsTools = (): AnyToolDef[] => [
     },
   }),
 ];
+
+/**
+ * Reverters. No workspaceId is journaled: each reverter re-resolves it with the
+ * same workspace(ctx) the handlers use. revertOperation refuses cross-cloudId
+ * reverts and runs with the caller's own OAuth grant — exactly what discovery
+ * needs — so the resolved workspace is the one the original op ran against.
+ */
+
+// PUT /objectschema/{id} requires name and objectSchemaKey; `description` is
+// always sent (defaulting to "") so one the update ADDED is cleared, not kept.
+reverters.register("assets.updateObjectSchema", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: object schema id missing from target.");
+  const before = entry.before as { name?: string; objectSchemaKey?: string; description?: string } | null;
+  if (!before?.name || !before.objectSchemaKey)
+    throw new Error("Cannot revert: journal entry has no captured `before` schema name/key.");
+  const ws = await workspace(ctx);
+  const resp = await ctx.client.assets(ws).put<unknown>(`/objectschema/${encodeURIComponent(id)}`, {
+    name: before.name,
+    objectSchemaKey: before.objectSchemaKey,
+    description: before.description ?? "",
+  });
+  return { reverted: id, response: resp.data };
+});
+
+// The object-type READ shape nests the icon (`icon.id`), but PUT /objecttype/{id}
+// takes a flat, required `iconId` — project it back, or the revert 400s.
+reverters.register("assets.updateObjectType", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: object type id missing from target.");
+  const before = entry.before as { name?: string; description?: string; icon?: { id?: string | number } } | null;
+  if (!before?.name) throw new Error("Cannot revert: journal entry has no captured `before` object type name.");
+  const body: Record<string, unknown> = { name: before.name, description: before.description ?? "" };
+  if (before.icon?.id !== undefined) body.iconId = String(before.icon.id);
+  const ws = await workspace(ctx);
+  const resp = await ctx.client.assets(ws).put<unknown>(`/objecttype/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
+});
+
+// The before-snapshot comes from the attribute LIST (read shape: nested
+// `defaultType`, plus read-only ids that the write shape rejects), so project it
+// onto the PUT body — the default type is a flat `defaultTypeId` there. The object
+// type id rides on target.parent (it is a path param the attribute id lacks).
+reverters.register("assets.updateObjectTypeAttribute", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const t = entry.target as { id?: string; parent?: string };
+  if (!t.id || !t.parent) throw new Error("Cannot revert: attribute id or object type id missing from target.");
+  const before = entry.before as Record<string, unknown> | null;
+  if (!before)
+    throw new Error("Cannot revert: journal entry has no captured `before` attribute (it was not on the object type).");
+  const body: Record<string, unknown> = {};
+  for (const k of [
+    "name",
+    "label",
+    "type",
+    "description",
+    "typeValue",
+    "typeValueMulti",
+    "additionalValue",
+    "minimumCardinality",
+    "maximumCardinality",
+    "suffix",
+    "includeChildObjectTypes",
+    "hidden",
+    "uniqueAttribute",
+    "summable",
+    "regexValidation",
+    "qlQuery",
+    "iql",
+    "options",
+  ] as const) {
+    if (before[k] !== undefined) body[k] = before[k];
+  }
+  const defaultTypeId = (before.defaultType as { id?: number } | undefined)?.id;
+  if (defaultTypeId !== undefined) body.defaultTypeId = defaultTypeId;
+  const ws = await workspace(ctx);
+  const resp = await ctx.client
+    .assets(ws)
+    .put<unknown>(`/objecttypeattribute/${encodeURIComponent(t.parent)}/${encodeURIComponent(t.id)}`, body);
+  return { reverted: t.id, response: resp.data };
+});
+
+type AssetAttributeValue = { value?: unknown; searchValue?: unknown; displayValue?: unknown };
+type AssetAttribute = { objectTypeAttributeId?: unknown; objectAttributeValues?: AssetAttributeValue[] };
+
+// Reverting an object update = write the PRIOR values of exactly the attributes
+// the update wrote (so read-only system attributes like Key/Created are never
+// touched). The object READ shape carries values as {value, displayValue,
+// searchValue, …} while the write shape wants
+// [{objectTypeAttributeId, objectAttributeValues:[{value}]}]; an attribute missing
+// from `before` had no value, so the empty value list clears what the update added.
+reverters.register("assets.updateObject", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: object id missing from target.");
+  const before = entry.before as { attributes?: AssetAttribute[] } | null;
+  if (!before) throw new Error("Cannot revert: journal entry has no captured `before` object.");
+  const written = (entry.request as { attributes?: AssetAttribute[] }).attributes ?? [];
+  if (written.length === 0) throw new Error("Cannot revert: journal entry recorded no attributes to restore.");
+  const prior = new Map((before.attributes ?? []).map((a) => [String(a.objectTypeAttributeId), a]));
+  const attributes = written.map((a) => {
+    const attrId = String(a.objectTypeAttributeId);
+    const values = prior.get(attrId)?.objectAttributeValues ?? [];
+    return {
+      objectTypeAttributeId: attrId,
+      objectAttributeValues: values.map((v) => ({ value: v.value ?? v.searchValue ?? v.displayValue })),
+    };
+  });
+  const ws = await workspace(ctx);
+  const resp = await ctx.client.assets(ws).put<unknown>(`/object/${encodeURIComponent(id)}`, { attributes });
+  return { reverted: id, response: resp.data };
+});

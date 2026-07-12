@@ -35,8 +35,8 @@ called first per user).
   *configuration* has no public API; see the
   [capability map](../architecture/jsm-capability-map.md)).
 - `jsm.listJsmOrganizations(serviceDeskId?)`.
-- `jsm.addCustomersToOrganization(organizationId, accountIds)` — destructive.
-- `jsm.removeCustomersFromOrganization(organizationId, accountIds)` — destructive.
+- `jsm.addCustomersToOrganization(organizationId, accountIds?, usernames?, commit)` — destructive, revertible (removes the customers it added).
+- `jsm.removeCustomersFromOrganization(organizationId, accountIds?, usernames?, commit)` — destructive, revertible (re-adds the customers it removed).
 - `jsm.searchKnowledgeBaseArticles(serviceDeskId, query)`.
 
 > Earlier versions also shipped queue/SLA/portal *write* tools — those called
@@ -61,43 +61,57 @@ Full template lifecycle verified live.
 
 ## Assets / Insight (`read_assets` / `write_assets`)
 
-**Credential:** API token side-channel for the data plane; OAuth
-required for the workspace-id discovery step (handled automatically).
+**Credential:** OAuth, with the CMDB granular scopes — *not* the API
+token side-channel. Every `assets.*` tool is `authMethod: "oauth"`, and
+the workspace-id discovery step that precedes each call is OAuth too, so
+a bound API token alone is insufficient (discovery raises
+`AUTH_REQUIRED`).
+
+Assets is a **Premium** JSM feature. On a non-Premium site these tools
+403 — that is a licensing limit, not a bug.
 
 ### Schemas
 - `assets.listObjectSchemas`.
 - `assets.getObjectSchema(schemaId)`.
-- `assets.createObjectSchema(name, objectSchemaKey, description?)` — destructive.
-- `assets.updateObjectSchema(schemaId, name?, objectSchemaKey?, description?)` — destructive, revertible.
+- `assets.createObjectSchema(name, objectSchemaKey, description?, commit)` — destructive.
+- `assets.updateObjectSchema(schemaId, name?, objectSchemaKey?, description?, commit)` — destructive, revertible.
 - `assets.exportAssetSchema(schemaId)` — emits schema + types + attributes as one JSON. Useful as a backup before destructive ops.
 
 ### Object types
 - `assets.listObjectTypes(schemaId)`.
 - `assets.getObjectType(objectTypeId)`.
-- `assets.createObjectType(schemaId, name, description?, iconId?, inherited?, parentObjectTypeId?)` — destructive.
-- `assets.updateObjectType(objectTypeId, name?, description?, iconId?)` — destructive, revertible.
+- `assets.createObjectType(schemaId, name, description?, iconId?, inherited?, parentObjectTypeId?, commit)` — destructive.
+- `assets.updateObjectType(objectTypeId, name?, description?, iconId?, commit)` — destructive, revertible.
 
 ### Attributes
 - `assets.getObjectTypeAttributes(objectTypeId)`.
-- `assets.createObjectTypeAttribute(objectTypeId, attribute)` — destructive.
-- `assets.updateObjectTypeAttribute(attributeId, attribute)` — destructive, revertible.
+- `assets.createObjectTypeAttribute(objectTypeId, attribute, commit)` — destructive.
+- `assets.updateObjectTypeAttribute(objectTypeId, attributeId, attribute, commit)` — destructive, revertible. `objectTypeId` is required: it is part of the path, not just a lookup hint.
 
 ### Objects (data plane)
 - `assets.aqlSearch(qlQuery, page?, resultPerPage?, includeAttributes?)`.
 - `assets.getObject(objectId)`.
-- `assets.createObject(objectTypeId, attributes[], hasAvatar?)` — destructive.
-- `assets.updateObject(objectId, attributes[])` — destructive, revertible.
-- `assets.deleteObject(objectId)` — destructive, irreversible.
+- `assets.createObject(objectTypeId, attributes[], hasAvatar?, commit)` — destructive.
+- `assets.updateObject(objectId, attributes[], commit)` — destructive, revertible.
+- `assets.deleteObject(objectId, commit)` — destructive, irreversible.
 
-### References & metadata
+### References & metadata (read-only)
 - `assets.getObjectReferences(objectId)`.
-- `assets.addObjectReference(objectId, targetObjectId, referenceTypeId)` — destructive, revertible.
-- `assets.removeObjectReference(objectId, targetObjectId, referenceTypeId)` — destructive, revertible.
 - `assets.getObjectAttachments(objectId)`.
 - `assets.getObjectHistory(objectId)`.
 
-### Bulk
-- `assets.importAssetsFromCsv(importConfigurationId, csvUrl? | csvInline?)` — destructive, irreversible.
+References are **read-only**. There is no add/remove-reference tool
+because there is no such endpoint: a reference is expressed as an
+attribute value, so you create or drop one by writing the referencing
+attribute through `assets.createObject` / `assets.updateObject`.
+
+### Bulk import
+- `assets.startImport(importId, commit)` — destructive, irreversible.
+
+`startImport` triggers a **pre-configured** import by its id. The import
+itself (source, mapping, schedule) is configured in the Assets UI; the
+API only starts it. There is no CSV-upload endpoint — you cannot hand
+gojira a CSV and have it ingested.
 
 ## Automation rules (`read_automation` / `write_automation`)
 
@@ -127,12 +141,20 @@ app is involved: the tools call
 
 - `customfields.listCustomFields(startAt?, maxResults?, query?, type[]?, id[]?)`.
 - `customfields.getCustomField(fieldId, include_contexts?)`.
-- `customfields.createCustomField(name, description?, type, searcherKey?)` — destructive, revertible.
-- `customfields.updateCustomField(fieldId, name?, description?, searcherKey?)` — destructive, revertible.
-- `customfields.deleteCustomField(fieldId)` — destructive, **irreversible** (may detach values from issues).
+- `customfields.createCustomField(name, description?, type, searcherKey?, commit)` — destructive, revertible.
+- `customfields.updateCustomField(fieldId, name?, description?, searcherKey?, commit)` — destructive, revertible.
+- `customfields.deleteCustomField(fieldId, commit)` — destructive, **irreversible** (may detach values from issues).
 - `customfields.listCustomFieldContexts(fieldId, startAt?, maxResults?)`.
-- `customfields.assignCustomFieldToProjects(fieldId, contextId, projectIds[])` — destructive, revertible.
-- `customfields.setCustomFieldOptions(fieldId, contextId, options[])` — destructive, revertible.
+- `customfields.assignCustomFieldToProjects(fieldId, contextId, projectIds[], commit)` — destructive, revertible.
+- `customfields.setCustomFieldOptions(fieldId, contextId, options[], commit)` — destructive, **not revertible**.
+
+`setCustomFieldOptions` is an upsert, not a replace: Jira splits the two
+verbs, so options *with* an `id` are PUT (update in place) and options
+*without* one are POST (create). Nothing is ever deleted. That is
+exactly why it journals `revertible: false` — re-applying the captured
+`before` would restore the edited options but could not remove the ones
+the call created. The `before` snapshot is still captured for a manual
+cleanup.
 
 ## Projects (`read_projects` / `write_projects`)
 

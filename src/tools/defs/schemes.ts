@@ -425,7 +425,9 @@ export const schemeTools = (): AnyToolDef[] => [
     needsCloudId: true,
     input: { screenId: z.string().min(1) },
     handler: async (input, ctx) => {
-      const resp = await ctx.client.jira().get<unknown>(`${SCREEN_PATH}/${encodeURIComponent(input.screenId)}`);
+      // There is no GET /screens/{id} (that path is PUT/DELETE only).
+      // List by ID via the ?id query.
+      const resp = await ctx.client.jira().get<unknown>(`${SCREEN_PATH}?id=${encodeURIComponent(input.screenId)}`);
       return resp.data;
     },
   }),
@@ -534,4 +536,35 @@ reverters.register("schemes.createNotificationScheme", async (entry, anyCtx) => 
   if (!id) throw new Error("Cannot revert: created scheme id missing.");
   await ctx.client.jira().delete<unknown>(`/rest/api/3/notificationscheme/${encodeURIComponent(id)}`);
   return { deleted: id };
+});
+
+// Reverting an update = PUT the captured `before` back. `before` is the full
+// scheme from GET ...?expand=all, so the grant list restores as a PUT-replace.
+reverters.register("schemes.updatePermissionScheme", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: permission scheme id missing.");
+  const before = entry.before as { name?: string; description?: string; permissions?: unknown[] } | null;
+  // PUT /permissionscheme/{id} requires `name`, so a snapshot without one is unusable.
+  if (!before?.name) throw new Error("Cannot revert: journal entry has no captured `before` scheme name.");
+  const body: Record<string, unknown> = { name: before.name };
+  if (before.description !== undefined) body.description = before.description;
+  if (before.permissions !== undefined) body.permissions = before.permissions;
+  const resp = await ctx.client.jira().put<unknown>(`/rest/api/3/permissionscheme/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
+});
+
+// Reverting an update = PUT the captured `before` back. PUT
+// /notificationscheme/{id} only accepts name + description, so only those are sent.
+reverters.register("schemes.updateNotificationScheme", async (entry, anyCtx) => {
+  const ctx = anyCtx as import("../types.js").ToolContext;
+  const id = (entry.target as { id?: string }).id;
+  if (!id) throw new Error("Cannot revert: notification scheme id missing.");
+  const before = entry.before as { name?: string; description?: string } | null;
+  if (!before) throw new Error("Cannot revert: journal entry has no captured `before` scheme.");
+  const body: Record<string, unknown> = {};
+  if (before.name !== undefined) body.name = before.name;
+  if (before.description !== undefined) body.description = before.description;
+  const resp = await ctx.client.jira().put<unknown>(`/rest/api/3/notificationscheme/${encodeURIComponent(id)}`, body);
+  return { reverted: id, response: resp.data };
 });

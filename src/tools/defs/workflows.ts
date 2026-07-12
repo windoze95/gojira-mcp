@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
 import type { ToolContext } from "../types.js";
+import { AtlassianApiError } from "../../atlassian/errors.js";
 import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
 import { reverters } from "../../operations/revert.js";
 
@@ -28,20 +29,43 @@ interface WorkflowRead {
   [k: string]: unknown;
 }
 
-/** Read one workflow by name or entity id via the bulk read endpoint. */
-async function readWorkflow(ctx: ToolContext, key: string): Promise<WorkflowRead | null> {
-  const resp = await ctx.client.jira().post<{ workflows?: WorkflowRead[] }>(`${API}/workflows`, {
-    workflowNames: [key],
-  });
-  let list = resp.data.workflows ?? [];
-  if (list.length === 0) {
-    // Fall back to treating the key as an entity id.
-    const byId = await ctx.client.jira().post<{ workflows?: WorkflowRead[] }>(`${API}/workflows`, {
-      workflowIds: [{ entityId: key }],
-    });
-    list = byId.data.workflows ?? [];
+/** An async task (GET /rest/api/3/task/{id}); `id` is the task id, there is no `taskId`. */
+interface TaskStatus {
+  id?: string;
+  status?: string;
+  progress?: number;
+  [k: string]: unknown;
+}
+
+/** Terminal task states — CANCEL_REQUESTED and ENQUEUED/RUNNING are still in flight. */
+function isTaskFinished(status: string | undefined): boolean {
+  return status === "COMPLETE" || status === "FAILED" || status === "CANCELLED" || status === "DEAD";
+}
+
+/**
+ * One bulk-read lookup. WorkflowReadRequest is `additionalProperties: false` and
+ * takes `workflowNames`/`workflowIds` as arrays of plain STRINGS. An unmatched key
+ * answers 404 rather than an empty list, which is a miss, not a failure.
+ */
+async function readWorkflowBy(ctx: ToolContext, body: Record<string, string[]>): Promise<WorkflowRead | null> {
+  try {
+    const resp = await ctx.client.jira().post<{ workflows?: WorkflowRead[] }>(`${API}/workflows`, body);
+    return resp.data.workflows?.[0] ?? null;
+  } catch (err) {
+    if (err instanceof AtlassianApiError && err.statusCode === 404) return null;
+    throw err;
   }
-  return list[0] ?? null;
+}
+
+/**
+ * Read one workflow by name or entity id via the bulk read endpoint. The API rejects
+ * `workflowNames` and `workflowIds` in the same request, so the two are tried in turn.
+ */
+async function readWorkflow(ctx: ToolContext, key: string): Promise<WorkflowRead | null> {
+  const byName = await readWorkflowBy(ctx, { workflowNames: [key] });
+  if (byName) return byName;
+  // Fall back to treating the key as an entity id.
+  return readWorkflowBy(ctx, { workflowIds: [key] });
 }
 
 export const workflowTools = (): AnyToolDef[] => [
@@ -271,7 +295,10 @@ export const workflowTools = (): AnyToolDef[] => [
     name: "workflows.publishWorkflowSchemeDraft",
     description:
       "Publish a workflow SCHEME's draft (this is how workflow changes go live in Jira Cloud — there is no per-workflow " +
-      "publish). Async: returns a task id which is polled briefly. `statusMappings` maps old→new statuses for in-flight issues.",
+      "publish). Asynchronous: Jira runs the publish as a background task, which this tool polls for up to ~60s. A result " +
+      "with status COMPLETE/FAILED/CANCELLED/DEAD is final; if the budget runs out the result is status RUNNING plus the " +
+      "`taskId`, and the caller MUST verify completion itself (GET /rest/api/3/task/{taskId}) — the publish is NOT done yet. " +
+      "`statusMappings` maps old→new statuses for in-flight issues.",
     group: "write_workflows",
     authMethod: "oauth",
     needsCloudId: true,
@@ -300,20 +327,33 @@ export const workflowTools = (): AnyToolDef[] => [
         request: { schemeId: input.schemeId } as Record<string, unknown>,
         revertible: false,
         run: async () => {
-          // Returns 303 See Other with a Location to the async task.
-          const startResp = await c.post<{ taskId?: string }>(
+          // Publish answers 303 See Other with an EMPTY body and a Location pointing at
+          // the async task. Axios follows that (same-host) redirect, so what lands here
+          // is the task resource itself — keyed `id`; the API never returns a `taskId`.
+          const startResp = await c.post<TaskStatus>(
             `${API}/workflowscheme/${encodeURIComponent(input.schemeId)}/draft/publish`,
             body,
           );
-          const taskId = startResp.data?.taskId;
-          if (!taskId) return startResp.data ?? { status: "SUBMITTED" };
-          for (let i = 0; i < 10; i++) {
-            await new Promise((r) => setTimeout(r, 1500));
-            const status = await c.get<{ status?: string }>(`${API}/task/${encodeURIComponent(taskId)}`);
-            const s = status.data.status;
-            if (s === "COMPLETE" || s === "FAILED" || s === "CANCELLED") return status.data;
+          const taskId = startResp.data?.id;
+          if (!taskId) {
+            return {
+              status: "SUBMITTED",
+              note: "Publish submitted, but no task id came back; verify the scheme in Jira.",
+            };
           }
-          return { status: "RUNNING", taskId, note: "Publish still in progress; poll /task/{id}." };
+          if (isTaskFinished(startResp.data.status)) return startResp.data;
+          // A scheme switch routinely runs ~30s+, so poll on a backoff within a bounded
+          // budget and hand the task id back rather than pretend the publish finished.
+          for (let i = 0; i < 15; i++) {
+            await new Promise((r) => setTimeout(r, Math.min(1500 + i * 500, 5000)));
+            const status = await c.get<TaskStatus>(`${API}/task/${encodeURIComponent(taskId)}`);
+            if (isTaskFinished(status.data.status)) return status.data;
+          }
+          return {
+            status: "RUNNING",
+            taskId,
+            note: `Publish still in progress; poll GET ${API}/task/${taskId} until it is COMPLETE.`,
+          };
         },
       });
       return { ok: true, journal_id: entry.opId, result: entry.after };
