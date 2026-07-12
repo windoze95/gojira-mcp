@@ -60,7 +60,7 @@ export const utilityTools = (): AnyToolDef[] => [
   defineTool({
     name: "gojira.bindApiToken",
     description:
-      "Bind a per-user Atlassian API token for tools that don't accept OAuth (JSM admin, some Bitbucket). Validated via /rest/api/3/myself, stored encrypted at rest.",
+      "Bind a per-user Atlassian API token for tools that don't accept OAuth (JSM admin, automation, Confluence). The site_url's real cloudId is resolved from its tenant_info endpoint and must match this instance's pinned cloudId; the credential is validated via /rest/api/3/myself and stored encrypted at rest.",
     group: "utility",
     authMethod: "oauth",
     needsCloudId: false,
@@ -74,14 +74,37 @@ export const utilityTools = (): AnyToolDef[] => [
       cloud_id: z.string().optional(),
     },
     handler: async (input, ctx) => {
-      if (
-        ctx.config.atlassian.pinnedCloudId &&
-        input.cloud_id &&
-        input.cloud_id !== ctx.config.atlassian.pinnedCloudId
-      ) {
+      // Resolve the site's TRUE cloudId from its public tenant_info endpoint.
+      // This is load-bearing for site pinning: the api-token clients route on
+      // `site_url` (apiTokenJira builds `https://${site_url}`), but the pin is
+      // enforced against `cloud_id`. If we trusted a caller-supplied cloud_id
+      // (or defaulted it to the pin) without proving it belongs to site_url, a
+      // token bound with cloud_id=pinned + site_url=<other tenant> would route
+      // every JSM/Confluence call to the wrong tenant while passing the guard.
+      let siteCloudId: string;
+      try {
+        const info = await axios.get<{ cloudId?: string }>(`https://${input.site_url}/_edge/tenant_info`, {
+          timeout: 15_000,
+        });
+        if (!info.data?.cloudId) throw new Error("tenant_info returned no cloudId");
+        siteCloudId = info.data.cloudId;
+      } catch (err) {
+        throw new ValidationError("Could not resolve the site's cloudId from its tenant_info endpoint.", {
+          site_url: input.site_url,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (input.cloud_id && input.cloud_id !== siteCloudId) {
+        throw new ValidationError("Supplied cloud_id does not match the site_url's actual cloudId.", {
+          site_url: input.site_url,
+          supplied: input.cloud_id,
+          actual: siteCloudId,
+        });
+      }
+      if (ctx.config.atlassian.pinnedCloudId && siteCloudId !== ctx.config.atlassian.pinnedCloudId) {
         throw new ValidationError(
-          "API token cloud_id does not match this instance's pinned cloudId.",
-          { pinned: ctx.config.atlassian.pinnedCloudId, supplied: input.cloud_id },
+          "The site_url belongs to a different cloudId than this instance's pinned cloudId.",
+          { pinned: ctx.config.atlassian.pinnedCloudId, site_cloud_id: siteCloudId, site_url: input.site_url },
         );
       }
       const auth = Buffer.from(`${input.email}:${input.token}`, "utf8").toString("base64");
@@ -114,7 +137,10 @@ export const utilityTools = (): AnyToolDef[] => [
         account_id: ctx.accountId,
         email: input.email,
         token: input.token,
-        cloud_id: input.cloud_id ?? ctx.config.atlassian.pinnedCloudId ?? null,
+        // The cloudId proven (above) to belong to site_url — never a blind
+        // default — so the pin guard and the site_url the clients route on can
+        // never disagree.
+        cloud_id: siteCloudId,
         site_url: input.site_url,
         display_name: body.displayName,
         added_at: Date.now(),

@@ -10,7 +10,7 @@ Total tools registered: **153**.
 
 ### `gojira.bindApiToken`
 
-Bind a per-user Atlassian API token for tools that don't accept OAuth (JSM admin, some Bitbucket). Validated via /rest/api/3/myself, stored encrypted at rest.
+Bind a per-user Atlassian API token for tools that don't accept OAuth (JSM admin, automation, Confluence). The site_url's real cloudId is resolved from its tenant_info endpoint and must match this instance's pinned cloudId; the credential is validated via /rest/api/3/myself and stored encrypted at rest.
 
 - **Group:** `utility`
 - **Auth method:** oauth
