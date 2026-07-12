@@ -10,6 +10,7 @@ import {
   confluenceBase,
   adminBase,
   assetsBase,
+  automationBase,
 } from "../atlassian/client.js";
 import { AtlassianApiError, mapAtlassianError } from "../atlassian/errors.js";
 import { ApiTokenStore } from "../auth/apiTokenStore.js";
@@ -410,6 +411,14 @@ function makeClientFactories(opts: {
       // to OAuth here; tools that need API token can call apiTokenJira() instead.
       return new AtlassianClient({
         baseURL: assetsBase(workspaceId),
+        auth: { bearer: oauthBearer() },
+        onCallMeta,
+      });
+    },
+    automation: () => {
+      if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
+      return new AtlassianClient({
+        baseURL: automationBase(cloudId),
         auth: { bearer: oauthBearer() },
         onCallMeta,
       });

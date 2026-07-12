@@ -67,6 +67,8 @@ export interface AtlassianClientFactories {
   admin(): AtlassianClient;
   /** Assets API at a particular workspace. */
   assets(workspaceId: string): AtlassianClient;
+  /** Jira Cloud Automation public API (api.atlassian.com/automation/public/jira/{cloudId}/rest/v1). */
+  automation(): AtlassianClient;
 }
 
 export interface ToolDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O = unknown> {
