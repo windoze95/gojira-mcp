@@ -5,9 +5,18 @@ import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryR
 import { InsufficientPermissionsError } from "../../middleware/errorHandler.js";
 
 /**
- * Org/platform admin tools. Uses GOJIRA_ORG_ADMIN_TOKEN (env-side) and
- * routes through admin.atlassian.com/admin/v1. Gated on
- * `GOJIRA_ENABLE_ORG_ADMIN=true` and the per-call caller verification cache.
+ * Org/platform admin tools. Uses GOJIRA_ORG_ADMIN_TOKEN (env-side) and routes
+ * through admin.atlassian.com/admin/v1. Gated on `GOJIRA_ENABLE_ORG_ADMIN=true`
+ * plus the operator-declared caller allowlist (GOJIRA_ORG_ADMIN_ACCOUNT_IDS).
+ *
+ * Endpoint corrections here (group management under /directory/, user lifecycle
+ * suspend-access/restore-access, audit-log epoch-millis timestamps) follow
+ * Atlassian's org-admin API reference but could NOT be live-verified — the dev
+ * environment has no org-admin API token. The group is off by default. Tools
+ * that targeted non-existent endpoints (domain verification, org app management,
+ * Rovo MCP settings) were removed rather than left to 404. The group list/get
+ * endpoints in particular may need the /groups/search POST form depending on the
+ * directory type; verify against your org before relying on them.
  */
 
 function org(ctx: import("../types.js").ToolContext): string {
@@ -111,7 +120,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "Call restoreUser on the same accountId.",
         run: async () => {
-          await c.post<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}/lifecycle/disable`);
+          await c.post<unknown>(`/orgs/${org(ctx)}/directory/users/${encodeURIComponent(input.accountId)}/suspend-access`);
           return { deactivated: input.accountId };
         },
       });
@@ -146,7 +155,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "Call deactivateUser on the same accountId.",
         run: async () => {
-          await c.post<unknown>(`/orgs/${org(ctx)}/users/${encodeURIComponent(input.accountId)}/lifecycle/enable`);
+          await c.post<unknown>(`/orgs/${org(ctx)}/directory/users/${encodeURIComponent(input.accountId)}/restore-access`);
           return { restored: input.accountId };
         },
       });
@@ -198,7 +207,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
           await ctx.client
             .admin()
             .post<unknown>(
-              `/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}/members`,
+              `/orgs/${org(ctx)}/directory/groups/${encodeURIComponent(input.groupId)}/memberships`,
               { account_id: input.accountId },
             );
           return { added: true };
@@ -236,7 +245,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
           await ctx.client
             .admin()
             .delete<unknown>(
-              `/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}/members/${encodeURIComponent(input.accountId)}`,
+              `/orgs/${org(ctx)}/directory/groups/${encodeURIComponent(input.groupId)}/memberships/${encodeURIComponent(input.accountId)}`,
             );
           return { removed: true };
         },
@@ -255,7 +264,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
     input: { cursor: z.string().optional() },
     handler: async (input, ctx) => {
       const q = input.cursor ? `?cursor=${encodeURIComponent(input.cursor)}` : "";
-      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/groups${q}`);
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/directory/groups${q}`);
       return resp.data;
     },
   }),
@@ -267,7 +276,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
     needsCloudId: false,
     input: { groupId: z.string().min(1) },
     handler: async (input, ctx) => {
-      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}`);
+      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/directory/groups/${encodeURIComponent(input.groupId)}`);
       return resp.data;
     },
   }),
@@ -298,7 +307,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "DELETE the created group id.",
         run: async () => {
-          const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/groups`, body);
+          const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/directory/groups`, body);
           return resp.data;
         },
       });
@@ -315,7 +324,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
     input: { groupId: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
       const c = ctx.client.admin();
-      const before = await c.get<unknown>(`/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}`);
+      const before = await c.get<unknown>(`/orgs/${org(ctx)}/directory/groups/${encodeURIComponent(input.groupId)}`);
       if (input.commit !== true) {
         return buildDeleteDryRun({
           tool: "orgAdmin.deleteGroup",
@@ -332,7 +341,7 @@ export const orgAdminTools = (): AnyToolDef[] => [
         request: { groupId: input.groupId } as Record<string, unknown>,
         revertible: false,
         run: async () => {
-          await c.delete<unknown>(`/orgs/${org(ctx)}/groups/${encodeURIComponent(input.groupId)}`);
+          await c.delete<unknown>(`/orgs/${org(ctx)}/directory/groups/${encodeURIComponent(input.groupId)}`);
           return { deleted: input.groupId };
         },
       });
@@ -415,8 +424,8 @@ export const orgAdminTools = (): AnyToolDef[] => [
     authMethod: "org_admin",
     needsCloudId: false,
     input: {
-      from: z.string().datetime().optional(),
-      to: z.string().datetime().optional(),
+      from: z.string().optional().describe("ISO-8601 datetime or UNIX epoch millis; sent as epoch millis."),
+      to: z.string().optional().describe("ISO-8601 datetime or UNIX epoch millis; sent as epoch millis."),
       actor: z.string().optional(),
       action: z.string().optional(),
       product: z.string().optional(),
@@ -424,9 +433,16 @@ export const orgAdminTools = (): AnyToolDef[] => [
       limit: z.number().int().positive().max(500).default(100).optional(),
     },
     handler: async (input, ctx) => {
+      // The events API requires `from`/`to` as UNIX epoch MILLIS, not ISO.
+      const toEpochMs = (v: string): string => {
+        const n = Number(v);
+        if (Number.isFinite(n)) return String(Math.trunc(n));
+        const t = Date.parse(v);
+        return Number.isFinite(t) ? String(t) : v;
+      };
       const p = new URLSearchParams();
-      if (input.from) p.set("from", input.from);
-      if (input.to) p.set("to", input.to);
+      if (input.from) p.set("from", toEpochMs(input.from));
+      if (input.to) p.set("to", toEpochMs(input.to));
       if (input.actor) p.set("actor", input.actor);
       if (input.action) p.set("action", input.action);
       if (input.product) p.set("product", input.product);
@@ -447,179 +463,11 @@ export const orgAdminTools = (): AnyToolDef[] => [
       return resp.data;
     },
   }),
-  defineTool({
-    name: "orgAdmin.verifyDomain",
-    description: "Claim a domain for org-wide management.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    destructive: true,
-    input: { domain: z.string().min(1), commit: z.boolean().optional() },
-    handler: async (input, ctx) => {
-      const body = { domain: input.domain };
-      const dry = buildDryRunIfNotCommitted(input, {
-        tool: "orgAdmin.verifyDomain",
-        target: { kind: "org_domain", id: input.domain },
-        before: null,
-        after: body,
-      });
-      if (dry) return dry;
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "orgAdmin.verifyDomain",
-        cloudId: null,
-        target: { kind: "org_domain", id: input.domain },
-        before: null,
-        request: body as Record<string, unknown>,
-        revertible: false,
-        run: async () => {
-          const resp = await ctx.client.admin().post<unknown>(`/orgs/${org(ctx)}/domains`, body);
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
-  defineTool({
-    name: "orgAdmin.listInstalledApps",
-    description: "List Marketplace apps installed across the org's products.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    handler: async (_input, ctx) => {
-      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/apps`);
-      return resp.data;
-    },
-  }),
-  defineTool({
-    name: "orgAdmin.getApp",
-    description: "Get an installed Marketplace app's details.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    input: { appId: z.string().min(1) },
-    handler: async (input, ctx) => {
-      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/apps/${encodeURIComponent(input.appId)}`);
-      return resp.data;
-    },
-  }),
-  defineTool({
-    name: "orgAdmin.removeApp",
-    description: "Remove a Marketplace app from the org.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    destructive: true,
-    input: { appId: z.string().min(1), commit: z.boolean().optional() },
-    handler: async (input, ctx) => {
-      const c = ctx.client.admin();
-      const before = await c.get<unknown>(`/orgs/${org(ctx)}/apps/${encodeURIComponent(input.appId)}`);
-      if (input.commit !== true) {
-        return buildDeleteDryRun({
-          tool: "orgAdmin.removeApp",
-          target: { kind: "org_app", id: input.appId },
-          before: before.data,
-        });
-      }
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "orgAdmin.removeApp",
-        cloudId: null,
-        target: { kind: "org_app", id: input.appId },
-        before: before.data,
-        request: { appId: input.appId } as Record<string, unknown>,
-        revertible: false,
-        run: async () => {
-          await c.delete<unknown>(`/orgs/${org(ctx)}/apps/${encodeURIComponent(input.appId)}`);
-          return { removed: input.appId };
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
-
-  // ---- Rovo MCP settings ----
-  defineTool({
-    name: "orgAdmin.getRovoMcpSettings",
-    description: "Read the org-level settings governing the Atlassian Rovo MCP endpoint.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    handler: async (_input, ctx) => {
-      const resp = await ctx.client.admin().get<unknown>(`/orgs/${org(ctx)}/mcp-settings`);
-      return resp.data;
-    },
-  }),
-  defineTool({
-    name: "orgAdmin.setRovoMcpAllowedDomains",
-    description: "Replace the Rovo MCP allowed domain list.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    destructive: true,
-    input: { domains: z.array(z.string()).min(0), commit: z.boolean().optional() },
-    handler: async (input, ctx) => {
-      const c = ctx.client.admin();
-      const before = await c.get<unknown>(`/orgs/${org(ctx)}/mcp-settings`);
-      const dry = buildDryRunIfNotCommitted(input, {
-        tool: "orgAdmin.setRovoMcpAllowedDomains",
-        target: { kind: "rovo_mcp_settings" },
-        before: before.data,
-        after: { ...(before.data as object), allowedDomains: input.domains },
-      });
-      if (dry) return dry;
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "orgAdmin.setRovoMcpAllowedDomains",
-        cloudId: null,
-        target: { kind: "rovo_mcp_settings" },
-        before: before.data,
-        request: { domains: input.domains } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Re-issue setRovoMcpAllowedDomains with the captured `before.allowedDomains`.",
-        run: async () => {
-          const resp = await c.put<unknown>(`/orgs/${org(ctx)}/mcp-settings/allowed-domains`, {
-            allowedDomains: input.domains,
-          });
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
-  defineTool({
-    name: "orgAdmin.setRovoMcpApiTokenAuth",
-    description: "Enable or disable API token auth on the org's Rovo MCP.",
-    group: "admin_org",
-    authMethod: "org_admin",
-    needsCloudId: false,
-    destructive: true,
-    input: { enabled: z.boolean(), commit: z.boolean().optional() },
-    handler: async (input, ctx) => {
-      const c = ctx.client.admin();
-      const before = await c.get<unknown>(`/orgs/${org(ctx)}/mcp-settings`);
-      const dry = buildDryRunIfNotCommitted(input, {
-        tool: "orgAdmin.setRovoMcpApiTokenAuth",
-        target: { kind: "rovo_mcp_settings" },
-        before: before.data,
-        after: { ...(before.data as object), apiTokenAuthEnabled: input.enabled },
-      });
-      if (dry) return dry;
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "orgAdmin.setRovoMcpApiTokenAuth",
-        cloudId: null,
-        target: { kind: "rovo_mcp_settings" },
-        before: before.data,
-        request: { enabled: input.enabled } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call setRovoMcpApiTokenAuth with the captured `before.apiTokenAuthEnabled`.",
-        run: async () => {
-          const resp = await c.put<unknown>(`/orgs/${org(ctx)}/mcp-settings/api-token-auth`, { enabled: input.enabled });
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
+  // Removed (no public org-admin REST API — were guaranteed 404s):
+  //  - orgAdmin.verifyDomain: domains are read-only via the API
+  //    (GET /domains). Verification is a UI/DNS flow. listVerifiedDomains kept.
+  //  - orgAdmin.listInstalledApps / getApp / removeApp: there is no org-level
+  //    Marketplace app-management REST API.
+  //  - orgAdmin.getRovoMcpSettings / setRovoMcpAllowedDomains /
+  //    setRovoMcpApiTokenAuth: Rovo MCP admin settings have no public API (UI only).
 ];
