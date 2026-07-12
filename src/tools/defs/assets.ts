@@ -120,11 +120,26 @@ export const assetsTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const ws = await workspace(ctx);
       const c = ctx.client.assets(ws);
-      const before = await c.get<unknown>(`/objectschema/${encodeURIComponent(input.schemaId)}`);
-      const body: Record<string, unknown> = {};
-      if (input.name !== undefined) body.name = input.name;
-      if (input.objectSchemaKey !== undefined) body.objectSchemaKey = input.objectSchemaKey;
-      if (input.description !== undefined) body.description = input.description;
+      const before = await c.get<{ name?: string; objectSchemaKey?: string; description?: string }>(
+        `/objectschema/${encodeURIComponent(input.schemaId)}`,
+      );
+      // PUT /objectschema/{id} is a REPLACE, not a partial update: name and
+      // objectSchemaKey are mandatory on every call (the reverter below encodes the
+      // same truth). Merge the supplied fields over the captured `before` so the body
+      // is always a complete write shape — a partial body would 400 or blank fields.
+      const prev = before.data ?? {};
+      const name = input.name ?? prev.name;
+      const objectSchemaKey = input.objectSchemaKey ?? prev.objectSchemaKey;
+      if (!name || !objectSchemaKey)
+        throw new ToolError(
+          "VALIDATION_ERROR",
+          "PUT /objectschema requires name and objectSchemaKey; the schema read returned neither, so pass them explicitly.",
+        );
+      const body: Record<string, unknown> = {
+        name,
+        objectSchemaKey,
+        description: input.description ?? prev.description ?? "",
+      };
       const after = { ...(before.data as object), ...body };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "assets.updateObjectSchema",
@@ -244,11 +259,26 @@ export const assetsTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const ws = await workspace(ctx);
       const c = ctx.client.assets(ws);
-      const before = await c.get<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}`);
-      const body: Record<string, unknown> = {};
-      if (input.name !== undefined) body.name = input.name;
-      if (input.description !== undefined) body.description = input.description;
-      if (input.iconId !== undefined) body.iconId = input.iconId;
+      const before = await c.get<{ name?: string; description?: string; icon?: { id?: string | number } }>(
+        `/objecttype/${encodeURIComponent(input.objectTypeId)}`,
+      );
+      // PUT /objecttype/{id} is a REPLACE, not a partial update: name and iconId are
+      // mandatory on every call. Merge the supplied fields over the captured `before`,
+      // projecting the read shape onto the write shape exactly as the reverter does —
+      // the read nests the icon (`icon.id`), the PUT takes a flat `iconId`.
+      const prev = before.data ?? {};
+      const name = input.name ?? prev.name;
+      const iconId = input.iconId ?? (prev.icon?.id !== undefined ? String(prev.icon.id) : undefined);
+      if (!name || !iconId)
+        throw new ToolError(
+          "VALIDATION_ERROR",
+          "PUT /objecttype requires name and iconId; the object type read returned neither, so pass them explicitly.",
+        );
+      const body: Record<string, unknown> = {
+        name,
+        description: input.description ?? prev.description ?? "",
+        iconId,
+      };
       const after = { ...(before.data as object), ...body };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "assets.updateObjectType",

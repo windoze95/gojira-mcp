@@ -56,6 +56,9 @@ async function main(): Promise<void> {
     logger.info({ signal }, "shutdown initiated");
 
     // Backstop: never hang forever waiting on a stuck connection or stream.
+    // Deliberately longer than the tool-drain deadline inside gojiraShutdown
+    // (DRAIN_TIMEOUT_MS, server.ts) so a slow tool call gets its bounded wait
+    // and the remaining steps still get to run before this fires.
     const hardTimer = setTimeout(() => {
       logger.warn("graceful shutdown timed out; forcing exit");
       process.exit(1);
@@ -68,8 +71,9 @@ async function main(): Promise<void> {
     //    AFTER the transports are gone. Awaiting it here deadlocks.
     const httpClosed = new Promise<void>((resolve) => server.close(() => resolve()));
 
-    // 2. Close MCP sessions/transports so in-flight streams and their
-    //    journal/audit writes finish rather than being killed mid-write.
+    // 2. Stop admitting new /mcp work, wait (bounded) for tool handlers already
+    //    running to return so their journal/audit writes complete rather than
+    //    being killed mid-write, then close the MCP sessions/transports.
     try {
       const gojiraShutdown = app.locals.gojiraShutdown as undefined | (() => Promise<void>);
       if (gojiraShutdown) await gojiraShutdown();

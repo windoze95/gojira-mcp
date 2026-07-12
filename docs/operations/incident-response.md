@@ -45,24 +45,26 @@ key alone is useless.
 3. Stop the service.
 4. Update `TOKEN_ENCRYPTION_KEY` in your secret store.
 5. Delete every `token:*` and `apitoken:*` from Redis — they're
-   unreadable under the new key anyway:
+   unreadable under the new key anyway. Run from the repo root; under a
+   deploy profile add the `-p` you deployed with (`-p gojira-prod`), since
+   the stack sets no `container_name` and there is no `gojira-redis`
+   container to address:
    ```bash
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-       --scan --pattern "token:*" | xargs -L 100 redis-cli ... DEL
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-       --scan --pattern "apitoken:*" | xargs -L 100 redis-cli ... DEL
+   RCLI=(docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD")
+   "${RCLI[@]}" --scan --pattern "token:*"    | xargs -L 100 "${RCLI[@]}" DEL
+   "${RCLI[@]}" --scan --pattern "apitoken:*" | xargs -L 100 "${RCLI[@]}" DEL
    ```
 6. Also revoke `refresh_family:*` and the corresponding `mcp_token:*`,
-   `mcp_refresh:*`, `rt_family:*` keys — bearers issued under the old
-   key reference Atlassian credentials that won't decrypt:
+   `mcp_refresh:*`, `rt_family:*`, `rt_family_account:*` keys — bearers
+   issued under the old key reference Atlassian credentials that won't
+   decrypt:
    ```bash
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-       --scan --pattern "mcp_*" | xargs -L 100 redis-cli ... DEL
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-       --scan --pattern "refresh_family*" | xargs -L 100 redis-cli ... DEL
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
-       --scan --pattern "rt_family:*" | xargs -L 100 redis-cli ... DEL
+   "${RCLI[@]}" --scan --pattern "mcp_*"          | xargs -L 100 "${RCLI[@]}" DEL
+   "${RCLI[@]}" --scan --pattern "refresh_family*" | xargs -L 100 "${RCLI[@]}" DEL
+   "${RCLI[@]}" --scan --pattern "rt_family*"      | xargs -L 100 "${RCLI[@]}" DEL
    ```
+   (`rt_family*` without the colon sweeps `rt_family:*` and
+   `rt_family_account:*` in one pass.)
 7. Restart the service.
 8. All users re-authenticate from scratch.
 
@@ -96,7 +98,7 @@ Catastrophic.
    invalidation.
 2. Operator clears the cached binding:
    ```bash
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+   docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
        DEL "apitoken:<accountId>"
    ```
 3. Audit all JSM/Assets calls under that account in the leak window.
@@ -179,7 +181,7 @@ NearLimit signals.
    counts.
 2. Inspect their bucket state:
    ```bash
-   docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+   docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
        HGETALL "ratelimit:<accountId>"
    ```
 3. If a single user is the cause: lower their effective rate by either
@@ -193,18 +195,25 @@ NearLimit signals.
    the same site are running tools simultaneously, you may need to
    stagger.
 
-## Incident: Stuck publish workflow
+## Incident: Stuck workflow-scheme publish
 
-**Trigger:** `workflows.publishWorkflow` returned `status: "RUNNING"` and
-hasn't completed.
+**Trigger:** `workflows.publishWorkflowSchemeDraft` returned
+`status: "RUNNING"` and hasn't completed. (Publishing in Jira Cloud is
+per *scheme* — there is no per-workflow publish tool.)
+
+`RUNNING` is not a failure. It means the tool's ~60s polling budget ran
+out before Jira's background task finished, so the result carries the
+`taskId` and the caller is responsible for confirming the outcome — the
+publish is **not** done yet.
 
 **Playbook:**
 
 1. Re-fetch the task: `GET /rest/api/3/task/<taskId>` directly via
    the Jira REST API (or write a one-off tool).
-2. Atlassian publish takes longer than 15 seconds for large workflows
-   sometimes. Wait and retry.
-3. If `status: "FAILED"`: Atlassian's response includes the failure
+2. A scheme switch routinely runs ~30s+, and large schemes exceed the
+   polling budget. Wait and re-poll before assuming anything is wrong.
+3. Terminal states are `COMPLETE`, `FAILED`, `CANCELLED`, `DEAD`.
+4. If `status: "FAILED"`: Atlassian's response includes the failure
    reason. Common cause is in-flight issues whose status doesn't appear
    in `statusMappings`.
 

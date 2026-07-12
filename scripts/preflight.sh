@@ -71,11 +71,32 @@ scope_has() { [[ " $scp " == *" $1 "* ]]; }
 check_scope() { # check_scope GROUP SCOPE
   if has "$1" && ! scope_has "$2"; then ylw "⚠ group '$1' is enabled but scope '$2' is not in ATLASSIAN_OAUTH_SCOPES"; warn=1; fi
 }
-# Confluence admin tools ride the per-user API token (site host, Basic) — no
-# OAuth scopes needed; nothing to check here.
-check_scope read_assets            "read:cmdb-object:jira"    # Assets needs CMDB granular scopes
+# jsm.* + forms.* (read_jsm_admin/write_jsm_admin) and confluence.* ride the
+# per-user API token (site host, Basic) — authMethod api_token, no OAuth scope
+# at all. Do NOT check servicedesk scopes against those groups: it fires a false
+# warning on the shipped prod profile.
+#
+# Assets is the group that genuinely needs OAuth. Its tools are authMethod oauth
+# and the Assets API only honors GRANULAR CMDB scopes (classic scopes 401 with
+# "scope does not match").
+check_scope read_assets            "read:cmdb-object:jira"
+check_scope read_assets            "read:cmdb-schema:jira"
+check_scope read_assets            "read:cmdb-type:jira"
+check_scope read_assets            "read:cmdb-attribute:jira"
 check_scope write_assets           "write:cmdb-object:jira"
-check_scope read_jsm_admin         "read:servicedesk-request"
+check_scope write_assets           "write:cmdb-schema:jira"
+check_scope write_assets           "write:cmdb-type:jira"
+check_scope write_assets           "write:cmdb-attribute:jira"
+# Assets workspace discovery (GET /rest/servicedeskapi/assets/workspace,
+# src/atlassian/assetsWorkspace.ts) runs on the OAuth bearer, so *Assets* — not
+# JSM — is what needs read:servicedesk-request. Checked once for either group.
+if has read_assets || has write_assets; then
+  if ! scope_has "read:servicedesk-request"; then
+    ylw "⚠ assets groups are enabled but scope 'read:servicedesk-request' is not in ATLASSIAN_OAUTH_SCOPES"
+    ylw "  (Assets workspace discovery needs it; without it every assets.* tool 401s)"
+    warn=1
+  fi
+fi
 check_scope read_workflows         "manage:jira-configuration"
 if has read_automation || has write_automation; then
   ylw "ℹ automation groups enabled: automation tools need a bound per-user API token"

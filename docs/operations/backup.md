@@ -8,13 +8,19 @@ What's worth backing up, why, and how to restore.
 |---|---|
 | `oauth_client:*` (registered MCP clients) | Medium — losing them means clients re-register, which most do automatically. |
 | `pending_auth:*`, `atlassian_state:*`, `auth_code:*` | Skip — short TTL (5-10 min), in-flight only. |
-| `mcp_token:*`, `mcp_refresh:*`, `rt_family:*`, `refresh_family:*`, `refresh_family_tokens:*` | Low — losing them forces clients to re-`/authorize`, but no permanent data is destroyed. |
+| `mcp_token:*`, `mcp_refresh:*`, `rt_family:*`, `rt_family_account:*`, `refresh_family:*`, `refresh_family_tokens:*` | Low — losing them forces clients to re-`/authorize`, but no permanent data is destroyed. |
 | `token:<accountId>` (encrypted Atlassian credentials) | High — losing them forces re-auth across all users. Useless without `TOKEN_ENCRYPTION_KEY`. |
 | `apitoken:<accountId>` (encrypted API tokens) | High — same as above. |
 | `op_journal:*`, `op_journal_idx:*` | High — operational forensics; cannot be regenerated. |
 | `assets_workspace:*` | Skip — 24h cache, regenerable. |
-| `org_admin_verified:*` | Skip — 5min cache, regenerable. |
 | `ratelimit:*` | Skip — 120s TTL, regenerable. |
+
+That table is exhaustive — see [Redis schema](../reference/redis-schema.md)
+for the authoritative key list. In particular there is **no key holding
+org-admin caller verification**: that gate is a static allowlist read from
+`GOJIRA_ORG_ADMIN_ACCOUNT_IDS` at process start, so it lives in your
+secret store and your `.env`, not in Redis. Backing up Redis does not back
+it up; losing Redis does not lose it.
 
 Backup priority: `token:*` > `op_journal*` > `apitoken:*` > everything
 else.
@@ -27,15 +33,20 @@ The compose stack runs Redis with `--appendonly yes`. AOF gives
 near-zero data loss on restart. To capture snapshots periodically:
 
 ```bash
-# host-side cron, daily
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" BGSAVE
+# host-side cron, daily. Run from the repo root. Under a deploy profile add
+# the same -p you deployed with (e.g. `docker compose -p gojira-prod ...`) —
+# the compose stack sets no container_name, so there is no `gojira-redis`
+# container to address directly.
+mkdir -p ./backups
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" BGSAVE
 sleep 5
-docker run --rm \
-    -v gojira-mcp_redis-data:/data \
-    -v "$(pwd)/backups":/backup \
-    alpine \
-    sh -c 'cp /data/dump.rdb /backup/dump-$(date +%F).rdb && gzip /backup/dump-$(date +%F).rdb'
+docker compose cp redis:/data/dump.rdb "./backups/dump-$(date +%F).rdb"
+gzip -f "./backups/dump-$(date +%F).rdb"
 ```
+
+Copying out of the service sidesteps the volume name, which is also
+project-scoped (`gojira-mcp_redis-data` by default, `gojira-prod_redis-data`
+under the prod profile).
 
 Retain 30 days locally, longer offsite.
 
@@ -49,10 +60,10 @@ set -e
 BACKUP_DIR=./backups/$(date +%F)
 mkdir -p "$BACKUP_DIR"
 for pattern in "token:*" "apitoken:*" "op_journal:*" "op_journal_idx:*"; do
-  docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+  docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
       --scan --pattern "$pattern" |
   while read -r key; do
-    docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" DUMP "$key" \
+    docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" DUMP "$key" \
       > "$BACKUP_DIR/$(echo "$key" | tr / _).dump"
   done
 done
@@ -84,6 +95,14 @@ The key is the keystone — without it, every backup of `token:*` and
 Same treatment. Plus: rotate the token on a 6-month cadence
 *regardless* of incident — this limits the blast radius of any
 backup that quietly went missing.
+
+`GOJIRA_ORG_ADMIN_ACCOUNT_IDS` — the allowlist of callers permitted to
+invoke `orgAdmin.*` — is not a secret, but it *is* the whole gate, and it
+exists only in config. Restore it with the rest of `.env`. If it is dropped
+while `GOJIRA_ENABLE_ORG_ADMIN=true`, startup config validation rejects the
+boot outright (an empty allowlist fails closed, so the process refuses to
+run rather than serve an ungated one) — and a *stale* copy silently
+re-grants access to whoever you last removed.
 
 ## Restore drill
 

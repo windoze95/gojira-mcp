@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
+import type { AtlassianClient } from "../../atlassian/client.js";
 import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
 import { reverters } from "../../operations/revert.js";
 
@@ -23,6 +24,65 @@ import { reverters } from "../../operations/revert.js";
  */
 
 const SD = "/rest/servicedeskapi";
+
+/** Page size and a hard page cap for the org-membership walk (a runaway pager must terminate). */
+const MEMBER_PAGE_SIZE = 50;
+const MEMBER_MAX_PAGES = 200;
+
+/**
+ * Snapshot an organization's current members (accountIds), following pagination.
+ *
+ * Membership mutations are only honestly revertible if we know who was ALREADY
+ * a member. POST /organization/{id}/user is a no-op for a customer that is
+ * already in the org, so "undo the add" must evict ONLY the customers the call
+ * actually created — evicting the rest would remove state the call never
+ * created. The membership is therefore snapshotted before and after the
+ * mutation, and the diff is what a revert acts on. The diff (rather than
+ * "submitted minus already-present") is also what makes an add keyed by
+ * `usernames` revertible at all: emails do not identify a member — Atlassian
+ * privacy settings routinely redact `emailAddress` from the membership list —
+ * whereas the accountIds that appear/disappear between the two snapshots do.
+ */
+async function fetchOrganizationMembers(c: AtlassianClient, organizationId: string): Promise<string[]> {
+  const ids: string[] = [];
+  for (let page = 0; page < MEMBER_MAX_PAGES; page++) {
+    const p = new URLSearchParams({
+      start: String(page * MEMBER_PAGE_SIZE),
+      limit: String(MEMBER_PAGE_SIZE),
+    });
+    const resp = await c.get<{ values?: Array<{ accountId?: string }>; isLastPage?: boolean }>(
+      `${SD}/organization/${encodeURIComponent(organizationId)}/user?${p.toString()}`,
+    );
+    const values = resp.data.values ?? [];
+    for (const u of values) if (u.accountId) ids.push(u.accountId);
+    if (resp.data.isLastPage === true || values.length < MEMBER_PAGE_SIZE) break;
+  }
+  return ids;
+}
+
+/**
+ * `null` means the membership could not be read (endpoint denied to this token,
+ * org gone, transient failure). Never guess in that case: a null snapshot makes
+ * the op non-revertible rather than one that reverts state it did not create.
+ * Used post-mutation too — the mutation already landed, so a failed snapshot
+ * must not turn a successful op into a journaled failure.
+ */
+async function tryFetchOrganizationMembers(c: AtlassianClient, organizationId: string): Promise<string[] | null> {
+  try {
+    return await fetchOrganizationMembers(c, organizationId);
+  } catch {
+    return null;
+  }
+}
+
+/** accountIds present in `a` but not in `b`. */
+function membersDiff(a: string[], b: string[]): string[] {
+  const inB = new Set(b);
+  return a.filter((id) => !inB.has(id));
+}
+
+const MEMBERSHIP_SNAPSHOT_UNAVAILABLE =
+  "The organization's membership could not be read, so a revert cannot tell which customers this call actually changed.";
 
 export const jsmTools = (): AnyToolDef[] => [
   // --- Service desks ---
@@ -322,34 +382,43 @@ export const jsmTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
+      const c = ctx.client.apiTokenJira();
       const body: Record<string, unknown> = {};
       if (input.usernames?.length) body.usernames = input.usernames;
       if (input.accountIds?.length) body.accountIds = input.accountIds;
+      // Prior membership: the customers a revert must NOT touch (the add no-ops for them).
+      const priorMembers = await tryFetchOrganizationMembers(c, input.organizationId);
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "jsm.addCustomersToOrganization",
         target: { kind: "jsm_organization", id: input.organizationId },
-        before: null,
+        before: { memberAccountIds: priorMembers },
         after: body,
       });
       if (dry) return dry;
+      const revertible = priorMembers !== null;
       const entry = await ctx.journalOp({
         accountId: ctx.accountId,
         tool: "jsm.addCustomersToOrganization",
         cloudId: ctx.cloudId,
         target: { kind: "jsm_organization", id: input.organizationId },
-        before: null,
+        before: { memberAccountIds: priorMembers },
         // organizationId is the path param, `body` the customer list — the reverter needs both.
         request: { organizationId: input.organizationId, ...body },
-        revertible: true,
-        revertHint: "DELETE the same customers from the organization (jsm.removeCustomersFromOrganization).",
+        revertible,
+        revertHint: revertible
+          ? "Remove ONLY the customers this call actually added (`after.added`); customers that were already members stay."
+          : MEMBERSHIP_SNAPSHOT_UNAVAILABLE,
         run: async () => {
-          await ctx.client
-            .apiTokenJira()
-            .post<unknown>(`${SD}/organization/${encodeURIComponent(input.organizationId)}/user`, body);
-          return { added: true, ...body };
+          await c.post<unknown>(`${SD}/organization/${encodeURIComponent(input.organizationId)}/user`, body);
+          if (priorMembers === null) return { added: null, ...body };
+          const nowMembers = await tryFetchOrganizationMembers(c, input.organizationId);
+          // The add landed; a failed re-read must not fail the op — record the gap instead.
+          if (nowMembers === null) return { added: null, ...body };
+          return { added: membersDiff(nowMembers, priorMembers), ...body };
         },
       });
-      return { ok: true, journal_id: entry.opId };
+      const after = entry.after as { added: string[] | null };
+      return { ok: true, journal_id: entry.opId, added: after.added };
     },
   }),
   defineTool({
@@ -366,34 +435,43 @@ export const jsmTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
+      const c = ctx.client.apiTokenJira();
       const body: Record<string, unknown> = {};
       if (input.usernames?.length) body.usernames = input.usernames;
       if (input.accountIds?.length) body.accountIds = input.accountIds;
+      // Prior membership: a revert re-adds only the customers that were really there and really left.
+      const priorMembers = await tryFetchOrganizationMembers(c, input.organizationId);
       if (input.commit !== true) {
         return buildDeleteDryRun({
           tool: "jsm.removeCustomersFromOrganization",
           target: { kind: "jsm_organization", id: input.organizationId },
-          before: body,
+          before: { memberAccountIds: priorMembers, removing: body },
         });
       }
+      const revertible = priorMembers !== null;
       const entry = await ctx.journalOp({
         accountId: ctx.accountId,
         tool: "jsm.removeCustomersFromOrganization",
         cloudId: ctx.cloudId,
         target: { kind: "jsm_organization", id: input.organizationId },
-        before: body,
+        before: { memberAccountIds: priorMembers },
         // organizationId is the path param, `body` the customer list — the reverter needs both.
         request: { organizationId: input.organizationId, ...body },
-        revertible: true,
-        revertHint: "Re-add the customers (jsm.addCustomersToOrganization).",
+        revertible,
+        revertHint: revertible
+          ? "Re-add ONLY the customers this call actually removed (`after.removed`); customers that were not members stay out."
+          : MEMBERSHIP_SNAPSHOT_UNAVAILABLE,
         run: async () => {
-          await ctx.client
-            .apiTokenJira()
-            .delete<unknown>(`${SD}/organization/${encodeURIComponent(input.organizationId)}/user`, { data: body });
-          return { removed: true, ...body };
+          await c.delete<unknown>(`${SD}/organization/${encodeURIComponent(input.organizationId)}/user`, { data: body });
+          if (priorMembers === null) return { removed: null, ...body };
+          const nowMembers = await tryFetchOrganizationMembers(c, input.organizationId);
+          // The removal landed; a failed re-read must not fail the op — record the gap instead.
+          if (nowMembers === null) return { removed: null, ...body };
+          return { removed: membersDiff(priorMembers, nowMembers), ...body };
         },
       });
-      return { ok: true, journal_id: entry.opId };
+      const after = entry.after as { removed: string[] | null };
+      return { ok: true, journal_id: entry.opId, removed: after.removed };
     },
   }),
 
@@ -439,38 +517,47 @@ reverters.register("jsm.createRequestType", async (entry, anyCtx) => {
 });
 
 /**
- * Both org-membership tools call the SAME endpoint with opposite verbs
- * (POST adds, DELETE removes) and the same {usernames?, accountIds?} body, so
- * each is the other's inverse. Rebuild that call from the journal entry.
+ * Both org-membership tools call the SAME endpoint with opposite verbs (POST
+ * adds, DELETE removes), so each is the other's inverse — but the inverse must
+ * be applied to the customers the op ACTUALLY moved, not to the ones it was
+ * asked to move. Submitting a customer who is already a member is a no-op for
+ * them; reverting the whole submitted list would then evict someone the op never
+ * added, i.e. remove state it did not create. `after.added` / `after.removed` is
+ * the set that really moved — the diff of the membership snapshots taken around
+ * the mutation (see fetchOrganizationMembers) — and reverting by accountId works
+ * even when the original call named its customers by email.
  */
-function organizationUserCall(entry: import("../../operations/journal.js").JournalEntry): {
-  path: string;
-  body: Record<string, unknown>;
-} {
-  const req = (entry.request ?? {}) as { organizationId?: string; usernames?: string[]; accountIds?: string[] };
+function organizationRevertCall(
+  entry: import("../../operations/journal.js").JournalEntry,
+  moved: "added" | "removed",
+): { path: string; accountIds: string[] } {
+  const req = (entry.request ?? {}) as { organizationId?: string };
   const organizationId = req.organizationId ?? (entry.target as { id?: string }).id;
   if (!organizationId) throw new Error("Cannot revert: organizationId missing from the journal entry.");
-  const body: Record<string, unknown> = {};
-  if (req.usernames?.length) body.usernames = req.usernames;
-  if (req.accountIds?.length) body.accountIds = req.accountIds;
-  if (Object.keys(body).length === 0) {
-    throw new Error("Cannot revert: no customers recorded on the journal entry.");
+  const accountIds = (entry.after as Record<string, unknown> | null)?.[moved];
+  if (!Array.isArray(accountIds)) {
+    throw new Error(
+      `Cannot revert: the journal entry records no \`${moved}\` set — the organization's membership was not readable ` +
+        `around the call, so which customers it actually ${moved} is unknown.`,
+    );
   }
-  return { path: `${SD}/organization/${encodeURIComponent(organizationId)}/user`, body };
+  return { path: `${SD}/organization/${encodeURIComponent(organizationId)}/user`, accountIds: accountIds as string[] };
 }
 
-// Reverting an add = remove exactly the customers that were added.
+// Reverting an add = remove only the customers the add actually created.
 reverters.register("jsm.addCustomersToOrganization", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
-  const { path, body } = organizationUserCall(entry);
-  await ctx.client.apiTokenJira().delete<unknown>(path, { data: body });
-  return { removed: true, ...body };
+  const { path, accountIds } = organizationRevertCall(entry, "added");
+  if (accountIds.length === 0) return { removed: [], noop: "every submitted customer was already a member" };
+  await ctx.client.apiTokenJira().delete<unknown>(path, { data: { accountIds } });
+  return { removed: accountIds };
 });
 
-// Reverting a remove = re-add exactly the customers that were removed.
+// Reverting a remove = re-add only the customers the removal actually evicted.
 reverters.register("jsm.removeCustomersFromOrganization", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
-  const { path, body } = organizationUserCall(entry);
-  await ctx.client.apiTokenJira().post<unknown>(path, body);
-  return { added: true, ...body };
+  const { path, accountIds } = organizationRevertCall(entry, "removed");
+  if (accountIds.length === 0) return { added: [], noop: "no submitted customer was a member" };
+  await ctx.client.apiTokenJira().post<unknown>(path, { accountIds });
+  return { added: accountIds };
 });

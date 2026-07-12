@@ -117,7 +117,9 @@ export const workflowTools = (): AnyToolDef[] => [
     input: { workflowId: z.string().min(1) },
     handler: async (input, ctx) => {
       const wf = await readWorkflow(ctx, input.workflowId);
-      return { workflowId: input.workflowId, transitions: wf?.transitions ?? [] };
+      // A missing workflow is not a workflow with zero transitions — say which it is.
+      if (!wf) return { found: false, workflowId: input.workflowId };
+      return { workflowId: input.workflowId, transitions: wf.transitions ?? [] };
     },
   }),
   // Conditions / validators / post-functions are transition rules carried inline
@@ -133,8 +135,10 @@ export const workflowTools = (): AnyToolDef[] => [
       input: { workflowId: z.string().min(1), transitionId: z.string().min(1) },
       handler: async (input, ctx) => {
         const wf = await readWorkflow(ctx, input.workflowId);
-        const transition = (wf?.transitions ?? []).find((t) => String(t.id) === String(input.transitionId));
-        if (!transition) return { found: false, transitionId: input.transitionId };
+        // Same distinction as workflows.getWorkflow: no such workflow ≠ no such transition.
+        if (!wf) return { found: false, workflowId: input.workflowId };
+        const transition = (wf.transitions ?? []).find((t) => String(t.id) === String(input.transitionId));
+        if (!transition) return { found: false, workflowId: input.workflowId, transitionId: input.transitionId };
         return { transitionId: input.transitionId, [ruleField]: transition[ruleField] ?? [] };
       },
     });
@@ -269,6 +273,9 @@ export const workflowTools = (): AnyToolDef[] => [
       const wf = await readWorkflow(ctx, input.workflowId);
       const entityId = wf?.id ?? input.workflowId;
       if (input.commit !== true) {
+        // Don't preview a delete of something that isn't there — a typo'd name would
+        // otherwise come back as a perfectly ordinary-looking delete plan.
+        if (!wf) return { found: false, workflowId: input.workflowId };
         return buildDeleteDryRun({
           tool: "workflows.deleteWorkflow",
           target: { kind: "workflow", id: entityId },
