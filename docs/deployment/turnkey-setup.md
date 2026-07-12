@@ -141,11 +141,19 @@ permissions.
 
 ## 10. Multiple instances / prod + non-prod
 
-Same image, one `.env` per instance, different `ATLASSIAN_PINNED_CLOUD_ID` and
-hostname. Site-pinning refuses any tool call whose target cloudId ≠ the pinned
-value, so a prod instance can never touch a sandbox tenant and vice-versa. Run
-them side by side; a user with grants on both connects each as a separate
-connector.
+Same image, one env file per instance, different `ATLASSIAN_PINNED_CLOUD_ID`
+and hostname. Site-pinning refuses any tool call whose target cloudId ≠ the
+pinned value, so a prod instance can never touch a sandbox tenant and
+vice-versa. Ready-made profiles live in `deploy/`:
+
+```bash
+cp deploy/prod.env.example .env.prod && cp deploy/nonprod.env.example .env.nonprod
+docker compose -p gojira-prod    --env-file .env.prod    -f docker-compose.yml -f docker-compose.caddy.yml up -d
+docker compose -p gojira-nonprod --env-file .env.nonprod -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+Day-2 operations (upgrade, backup, secret rotation, incident response):
+[runbook.md](runbook.md).
 
 ## 11. What this server deliberately does NOT do
 
