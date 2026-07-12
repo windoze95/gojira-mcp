@@ -105,8 +105,14 @@ export const filterDashboardTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const c = ctx.client.jira();
       const before = await c.get<unknown>(`${API}/filter/${encodeURIComponent(input.filterId)}`);
-      const body: Record<string, unknown> = {};
-      for (const k of ["name", "jql", "description", "favourite", "sharePermissions"] as const) {
+      const prev = before.data as { name?: string; jql?: string };
+      // PUT /filter/{id} requires name AND jql. Partial updates (e.g. JQL-only)
+      // must carry the existing values or the request 400s. Merge from before.
+      const body: Record<string, unknown> = {
+        name: input.name ?? prev.name,
+        jql: input.jql ?? prev.jql,
+      };
+      for (const k of ["description", "favourite", "sharePermissions"] as const) {
         const v = (input as Record<string, unknown>)[k];
         if (v !== undefined) body[k] = v;
       }
@@ -215,10 +221,17 @@ export const filterDashboardTools = (): AnyToolDef[] => [
       name: z.string().min(1),
       description: z.string().optional(),
       sharePermissions: z.array(z.record(z.string(), z.unknown())).optional(),
+      editPermissions: z.array(z.record(z.string(), z.unknown())).optional(),
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
-      const body = { name: input.name, description: input.description, sharePermissions: input.sharePermissions ?? [] };
+      // POST /dashboard requires name, sharePermissions AND editPermissions.
+      const body = {
+        name: input.name,
+        description: input.description,
+        sharePermissions: input.sharePermissions ?? [],
+        editPermissions: input.editPermissions ?? [],
+      };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "dashboards.createDashboard",
         target: { kind: "dashboard", name: input.name },
@@ -254,16 +267,27 @@ export const filterDashboardTools = (): AnyToolDef[] => [
       name: z.string().optional(),
       description: z.string().optional(),
       sharePermissions: z.array(z.record(z.string(), z.unknown())).optional(),
+      editPermissions: z.array(z.record(z.string(), z.unknown())).optional(),
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
       const c = ctx.client.jira();
       const before = await c.get<unknown>(`${API}/dashboard/${encodeURIComponent(input.dashboardId)}`);
-      const body: Record<string, unknown> = {};
-      for (const k of ["name", "description", "sharePermissions"] as const) {
-        const v = (input as Record<string, unknown>)[k];
-        if (v !== undefined) body[k] = v;
-      }
+      const prev = before.data as {
+        name?: string;
+        description?: string;
+        sharePermissions?: unknown[];
+        editPermissions?: unknown[];
+      };
+      // PUT /dashboard/{id} requires name, sharePermissions AND editPermissions.
+      // Carry the existing values for anything the caller didn't override.
+      const body: Record<string, unknown> = {
+        name: input.name ?? prev.name,
+        sharePermissions: input.sharePermissions ?? prev.sharePermissions ?? [],
+        editPermissions: input.editPermissions ?? prev.editPermissions ?? [],
+      };
+      const description = input.description ?? prev.description;
+      if (description !== undefined) body.description = description;
       const after = { ...(before.data as object), ...body };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "dashboards.updateDashboard",

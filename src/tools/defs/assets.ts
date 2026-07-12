@@ -6,11 +6,20 @@ import { getAssetsWorkspaceId } from "../../atlassian/assetsWorkspace.js";
 import { ToolError } from "../../middleware/errorHandler.js";
 
 /**
- * Assets (Insight) — API token side-channel.
+ * Assets (Insight) — OAuth bearer + CMDB scopes.
  *
  * The Assets API is rooted at api.atlassian.com/jsm/assets/workspace/<wsId>/v1.
  * We discover wsId per cloudId via the OAuth-authed JSM endpoint and cache
  * for 24h (see atlassian/assetsWorkspace.ts).
+ *
+ * Auth note: these tools authenticate with the caller's OAuth bearer (both the
+ * workspace-discovery call and every data-plane call go through the OAuth-authed
+ * `ctx.client.assets()` factory), so they require Assets/CMDB OAuth scopes on
+ * the app — e.g. read:cmdb-object:jira, write:cmdb-object:jira,
+ * read:cmdb-schema:jira, write:cmdb-schema:jira. (Previously these tools
+ * declared the api_token side-channel, which the code never actually used.)
+ * NOTE: endpoint corrections below follow Atlassian's Assets API reference; they
+ * were NOT live-verified because the dev app lacks CMDB scopes.
  */
 
 async function workspace(ctx: import("../types.js").ToolContext): Promise<string> {
@@ -29,7 +38,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.listObjectSchemas",
     description: "List Assets object schemas in this workspace.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     handler: async (_input, ctx) => {
       const ws = await workspace(ctx);
@@ -41,7 +50,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.getObjectSchema",
     description: "Get a single object schema by id.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { schemaId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -54,7 +63,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.createObjectSchema",
     description: "Create a new object schema. Destructive — requires `commit:true`.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -97,7 +106,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.updateObjectSchema",
     description: "Update an object schema's name/key/description.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -146,7 +155,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.listObjectTypes",
     description: "List object types within a schema.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { schemaId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -159,7 +168,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.getObjectType",
     description: "Get an object type by id.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { objectTypeId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -172,14 +181,14 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.createObjectType",
     description: "Create an object type inside a schema. Destructive — requires `commit:true`.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
       schemaId: z.string().min(1),
       name: z.string().min(1),
       description: z.string().optional(),
-      iconId: z.string().optional(),
+      iconId: z.string().min(1).describe("Required by POST /objecttype/create. See GET /icon/global for ids."),
       inherited: z.boolean().optional(),
       parentObjectTypeId: z.string().optional(),
       commit: z.boolean().optional(),
@@ -221,7 +230,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.updateObjectType",
     description: "Update an object type.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -269,7 +278,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.getObjectTypeAttributes",
     description: "List attributes of an object type.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { objectTypeId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -282,7 +291,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.createObjectTypeAttribute",
     description: "Add an attribute to an object type.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -308,9 +317,11 @@ export const assetsTools = (): AnyToolDef[] => [
         request: { attribute: input.attribute } as Record<string, unknown>,
         revertible: false,
         run: async () => {
+          // Correct endpoint is POST /objecttypeattribute/{objectTypeId}
+          // (the old /objecttype/{id}/attribute/create is a Data Center path).
           const resp = await ctx.client
             .assets(ws)
-            .post<unknown>(`/objecttype/${encodeURIComponent(input.objectTypeId)}/attribute/create`, input.attribute);
+            .post<unknown>(`/objecttypeattribute/${encodeURIComponent(input.objectTypeId)}`, input.attribute);
           return resp.data;
         },
       });
@@ -321,10 +332,11 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.updateObjectTypeAttribute",
     description: "Update an attribute on an object type.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
+      objectTypeId: z.string().min(1).describe("The object type the attribute belongs to (required in the path)."),
       attributeId: z.string().min(1),
       attribute: z.record(z.string(), z.unknown()),
       commit: z.boolean().optional(),
@@ -332,11 +344,16 @@ export const assetsTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const ws = await workspace(ctx);
       const c = ctx.client.assets(ws);
-      const before = await c.get<unknown>(`/objecttypeattribute/${encodeURIComponent(input.attributeId)}`);
+      // No single-attribute GET exists; capture the attribute from the object
+      // type's attribute list for the before-snapshot.
+      const attrs = await c.get<Array<{ id?: string | number }>>(
+        `/objecttype/${encodeURIComponent(input.objectTypeId)}/attributes`,
+      );
+      const before = (attrs.data ?? []).find((a) => String(a.id) === String(input.attributeId)) ?? null;
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "assets.updateObjectTypeAttribute",
-        target: { kind: "asset_attribute", id: input.attributeId },
-        before: before.data,
+        target: { kind: "asset_attribute", id: input.attributeId, parent: input.objectTypeId },
+        before,
         after: input.attribute,
       });
       if (dry) return dry;
@@ -344,13 +361,17 @@ export const assetsTools = (): AnyToolDef[] => [
         accountId: ctx.accountId,
         tool: "assets.updateObjectTypeAttribute",
         cloudId: ctx.cloudId,
-        target: { kind: "asset_attribute", id: input.attributeId },
-        before: before.data,
+        target: { kind: "asset_attribute", id: input.attributeId, parent: input.objectTypeId },
+        before,
         request: { attribute: input.attribute } as Record<string, unknown>,
         revertible: true,
         revertHint: "PUT the captured `before` payload back.",
         run: async () => {
-          const resp = await c.put<unknown>(`/objecttypeattribute/${encodeURIComponent(input.attributeId)}`, input.attribute);
+          // Correct path requires both objectTypeId and the attribute id.
+          const resp = await c.put<unknown>(
+            `/objecttypeattribute/${encodeURIComponent(input.objectTypeId)}/${encodeURIComponent(input.attributeId)}`,
+            input.attribute,
+          );
           return resp.data;
         },
       });
@@ -362,7 +383,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.aqlSearch",
     description: "AQL (Assets Query Language) search.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: {
       qlQuery: z.string().min(1),
@@ -372,12 +393,16 @@ export const assetsTools = (): AnyToolDef[] => [
     },
     handler: async (input, ctx) => {
       const ws = await workspace(ctx);
-      const resp = await ctx.client.assets(ws).post<unknown>("/aql/objects", {
-        qlQuery: input.qlQuery,
-        page: input.page ?? 1,
-        resultPerPage: input.resultPerPage ?? 25,
-        includeAttributes: input.includeAttributes ?? true,
+      // The old GET /aql/objects was removed (Sept 2024). Current endpoint is
+      // POST /object/aql with the query in the body and paging in query params.
+      const p = new URLSearchParams({
+        startAt: String(((input.page ?? 1) - 1) * (input.resultPerPage ?? 25)),
+        maxResults: String(input.resultPerPage ?? 25),
+        includeAttributes: String(input.includeAttributes ?? true),
       });
+      const resp = await ctx.client
+        .assets(ws)
+        .post<unknown>(`/object/aql?${p.toString()}`, { qlQuery: input.qlQuery });
       return resp.data;
     },
   }),
@@ -387,7 +412,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.getObject",
     description: "Get an Assets object by id.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { objectId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -400,7 +425,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.createObject",
     description: "Create an Assets object.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -443,7 +468,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.updateObject",
     description: "Update an Assets object's attributes.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -484,7 +509,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.deleteObject",
     description: "Delete an Assets object. Irreversible.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: { objectId: z.string().min(1), commit: z.boolean().optional() },
@@ -521,7 +546,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.getObjectReferences",
     description: "List references for an Assets object.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { objectId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -530,97 +555,17 @@ export const assetsTools = (): AnyToolDef[] => [
       return resp.data;
     },
   }),
-  defineTool({
-    name: "assets.addObjectReference",
-    description: "Add a reference between two Assets objects.",
-    group: "write_assets",
-    authMethod: "api_token",
-    needsCloudId: true,
-    destructive: true,
-    input: {
-      objectId: z.string().min(1),
-      targetObjectId: z.string().min(1),
-      referenceTypeId: z.string().min(1),
-      commit: z.boolean().optional(),
-    },
-    handler: async (input, ctx) => {
-      const ws = await workspace(ctx);
-      const body = { targetObjectId: input.targetObjectId, referenceTypeId: input.referenceTypeId };
-      const dry = buildDryRunIfNotCommitted(input, {
-        tool: "assets.addObjectReference",
-        target: { kind: "asset_reference", parent: input.objectId },
-        before: null,
-        after: body,
-      });
-      if (dry) return dry;
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "assets.addObjectReference",
-        cloudId: ctx.cloudId,
-        target: { kind: "asset_reference", parent: input.objectId },
-        before: null,
-        request: body,
-        revertible: true,
-        revertHint: "Call removeObjectReference with the same triple.",
-        run: async () => {
-          const resp = await ctx.client.assets(ws).post<unknown>(`/object/${encodeURIComponent(input.objectId)}/reference`, body);
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
-  defineTool({
-    name: "assets.removeObjectReference",
-    description: "Remove a reference between two Assets objects.",
-    group: "write_assets",
-    authMethod: "api_token",
-    needsCloudId: true,
-    destructive: true,
-    input: {
-      objectId: z.string().min(1),
-      targetObjectId: z.string().min(1),
-      referenceTypeId: z.string().min(1),
-      commit: z.boolean().optional(),
-    },
-    handler: async (input, ctx) => {
-      const ws = await workspace(ctx);
-      const body = { targetObjectId: input.targetObjectId, referenceTypeId: input.referenceTypeId };
-      if (input.commit !== true) {
-        return buildDeleteDryRun({
-          tool: "assets.removeObjectReference",
-          target: { kind: "asset_reference", parent: input.objectId },
-          before: body,
-          message: "Would remove the reference. Re-invoke with `commit:true` to apply.",
-        });
-      }
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "assets.removeObjectReference",
-        cloudId: ctx.cloudId,
-        target: { kind: "asset_reference", parent: input.objectId },
-        before: body,
-        request: body,
-        revertible: true,
-        revertHint: "Call addObjectReference with the same triple.",
-        run: async () => {
-          const resp = await ctx.client
-            .assets(ws)
-            .delete<unknown>(
-              `/object/${encodeURIComponent(input.objectId)}/reference?targetObjectId=${encodeURIComponent(input.targetObjectId)}&referenceTypeId=${encodeURIComponent(input.referenceTypeId)}`,
-            );
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
+  // NOTE: There is no /object/{id}/reference endpoint in cloud Assets — outbound
+  // references are VALUES of reference-typed attributes. To add/remove a
+  // reference, use assets.updateObject and set (or clear) the objectId list on
+  // the appropriate reference attribute. The read tool getObjectReferences uses
+  // the valid /referenceinfo endpoint and is kept above.
 
   defineTool({
     name: "assets.getObjectAttachments",
     description: "List attachments on an Assets object.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { objectId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -633,7 +578,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.getObjectHistory",
     description: "Get the change history for an Assets object.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { objectId: z.string().min(1) },
     handler: async (input, ctx) => {
@@ -644,43 +589,38 @@ export const assetsTools = (): AnyToolDef[] => [
   }),
 
   defineTool({
-    name: "assets.importAssetsFromCsv",
+    name: "assets.startImport",
     description:
-      "Kick off an Assets CSV import. Expects an import-config id and either a CSV URL or inline CSV.",
+      "Trigger a pre-configured Assets import by its import id. The import (source, mapping, schedule) " +
+      "is configured in the Assets UI; the API only starts it — there is no CSV-upload endpoint.",
     group: "write_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
     input: {
-      importConfigurationId: z.string().min(1),
-      csvUrl: z.string().url().optional(),
-      csvInline: z.string().optional(),
+      importId: z.string().min(1).describe("The configured import's id (from the Assets import UI)."),
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
       const ws = await workspace(ctx);
-      const body: Record<string, unknown> = {
-        importConfigurationId: input.importConfigurationId,
-      };
-      if (input.csvUrl) body.csvUrl = input.csvUrl;
-      if (input.csvInline) body.csvData = input.csvInline;
       const dry = buildDryRunIfNotCommitted(input, {
-        tool: "assets.importAssetsFromCsv",
-        target: { kind: "asset_import", id: input.importConfigurationId },
+        tool: "assets.startImport",
+        target: { kind: "asset_import", id: input.importId },
         before: null,
-        after: { ...body, csvData: input.csvInline ? "[INLINE_CSV]" : undefined },
+        after: { importId: input.importId },
       });
       if (dry) return dry;
       const entry = await ctx.journalOp({
         accountId: ctx.accountId,
-        tool: "assets.importAssetsFromCsv",
+        tool: "assets.startImport",
         cloudId: ctx.cloudId,
-        target: { kind: "asset_import", id: input.importConfigurationId },
+        target: { kind: "asset_import", id: input.importId },
         before: null,
-        request: { importConfigurationId: input.importConfigurationId, hasCsvUrl: !!input.csvUrl, hasInline: !!input.csvInline } as Record<string, unknown>,
+        request: { importId: input.importId } as Record<string, unknown>,
         revertible: false,
         run: async () => {
-          const resp = await ctx.client.assets(ws).post<unknown>("/imports/start", body);
+          // Correct endpoint: POST /import/start/{id} (id in path, empty body).
+          const resp = await ctx.client.assets(ws).post<unknown>(`/import/start/${encodeURIComponent(input.importId)}`);
           return resp.data;
         },
       });
@@ -692,7 +632,7 @@ export const assetsTools = (): AnyToolDef[] => [
     name: "assets.exportAssetSchema",
     description: "Export a schema's full definition as JSON. Useful for backup before destructive ops.",
     group: "read_assets",
-    authMethod: "api_token",
+    authMethod: "oauth",
     needsCloudId: true,
     input: { schemaId: z.string().min(1) },
     handler: async (input, ctx) => {

@@ -85,14 +85,13 @@ export const schemeTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the created permission scheme.",
+        deriveTargetId: (after) => (after as { id?: string | number })?.id?.toString(),
         run: async () => {
           const resp = await ctx.client.jira().post<{ id: string }>(PERMISSION_SCHEME_PATH, body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string };
-      if (created?.id) entry.target = { ...entry.target, id: created.id };
-      return { ok: true, journal_id: entry.opId, scheme: created };
+      return { ok: true, journal_id: entry.opId, scheme: entry.after };
     },
   }),
   defineTool({
@@ -112,8 +111,10 @@ export const schemeTools = (): AnyToolDef[] => [
     handler: async (input, ctx) => {
       const c = ctx.client.jira();
       const before = await c.get<unknown>(`${PERMISSION_SCHEME_PATH}/${encodeURIComponent(input.schemeId)}?expand=all`);
-      const body: Record<string, unknown> = {};
-      if (input.name !== undefined) body.name = input.name;
+      const prev = before.data as { name?: string };
+      // PUT /permissionscheme/{id} requires `name`. A description- or
+      // permissions-only update must still carry the existing name or it 400s.
+      const body: Record<string, unknown> = { name: input.name ?? prev.name };
       if (input.description !== undefined) body.description = input.description;
       if (input.permissions !== undefined) body.permissions = input.permissions;
       const after = { ...(before.data as object), ...body };
@@ -281,14 +282,13 @@ export const schemeTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the created notification scheme.",
+        deriveTargetId: (after) => (after as { id?: string | number })?.id?.toString(),
         run: async () => {
           const resp = await ctx.client.jira().post<{ id: string }>(NOTIFICATION_SCHEME_PATH, body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string };
-      if (created?.id) entry.target = { ...entry.target, id: created.id };
-      return { ok: true, journal_id: entry.opId, scheme: created };
+      return { ok: true, journal_id: entry.opId, scheme: entry.after };
     },
   }),
   defineTool({

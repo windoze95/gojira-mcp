@@ -10,6 +10,7 @@ import {
   confluenceBase,
   adminBase,
   assetsBase,
+  automationBase,
 } from "../atlassian/client.js";
 import { AtlassianApiError, mapAtlassianError } from "../atlassian/errors.js";
 import { ApiTokenStore } from "../auth/apiTokenStore.js";
@@ -188,8 +189,14 @@ export function registerWrappedTool(
               (e as Error & { journalEntry?: JournalEntry }).journalEntry = entry;
               throw e;
             }
+            // Persist any created id onto the target so revert can find it.
+            const target =
+              jArgs.deriveTargetId && jArgs.deriveTargetId(after)
+                ? { ...jArgs.target, id: jArgs.deriveTargetId(after) as string }
+                : jArgs.target;
             return deps.journal.complete(opId, {
               ...jArgs,
+              target,
               after,
               outcome,
               revertible: jArgs.revertible ?? false,
@@ -404,6 +411,14 @@ function makeClientFactories(opts: {
       // to OAuth here; tools that need API token can call apiTokenJira() instead.
       return new AtlassianClient({
         baseURL: assetsBase(workspaceId),
+        auth: { bearer: oauthBearer() },
+        onCallMeta,
+      });
+    },
+    automation: () => {
+      if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
+      return new AtlassianClient({
+        baseURL: automationBase(cloudId),
         auth: { bearer: oauthBearer() },
         onCallMeta,
       });

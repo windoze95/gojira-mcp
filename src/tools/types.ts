@@ -41,8 +41,19 @@ export interface ToolContext {
   /**
    * Journals an operation. Returns the journaled entry (success or failure).
    * Callers should invoke this around their mutation.
+   *
+   * `deriveTargetId` lets a create tool extract the newly-created id from the
+   * run() result so it is persisted onto the journal target BEFORE completion —
+   * this is what makes revert work (reverters read `entry.target.id`). Mutating
+   * the returned entry afterward does NOT persist.
    */
-  journalOp(args: NewOperationArgs & { run: () => Promise<unknown> } & { revertible?: boolean }): Promise<JournalEntry>;
+  journalOp(
+    args: NewOperationArgs & {
+      run: () => Promise<unknown>;
+      revertible?: boolean;
+      deriveTargetId?: (after: unknown) => string | undefined;
+    },
+  ): Promise<JournalEntry>;
 }
 
 export interface AtlassianClientFactories {
@@ -56,6 +67,8 @@ export interface AtlassianClientFactories {
   admin(): AtlassianClient;
   /** Assets API at a particular workspace. */
   assets(workspaceId: string): AtlassianClient;
+  /** Jira Cloud Automation public API (api.atlassian.com/automation/public/jira/{cloudId}/rest/v1). */
+  automation(): AtlassianClient;
 }
 
 export interface ToolDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O = unknown> {

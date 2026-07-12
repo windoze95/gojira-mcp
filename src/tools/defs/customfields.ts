@@ -84,17 +84,13 @@ export const customFieldTools = (): AnyToolDef[] => [
         request: body as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE /rest/api/3/field/{id} on the created field.",
+        deriveTargetId: (after) => (after as { id?: string })?.id,
         run: async () => {
           const resp = await ctx.client.jira().post<{ id: string; name: string }>("/rest/api/3/field", body);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string; name?: string };
-      // Re-stamp target.id so revert can find the new field id.
-      if (created?.id) {
-        entry.target = { ...entry.target, id: created.id };
-      }
-      return { ok: true, journal_id: entry.opId, field: created };
+      return { ok: true, journal_id: entry.opId, field: entry.after };
     },
   }),
 
@@ -255,7 +251,9 @@ export const customFieldTools = (): AnyToolDef[] => [
 
   defineTool({
     name: "customfields.setCustomFieldOptions",
-    description: "Replace the option set on a custom field context (for select/multi-select fields).",
+    description:
+      "Create and/or update options on a custom field context (for select/multi-select fields). " +
+      "Options WITHOUT an `id` are created; options WITH an `id` update that existing option.",
     group: "write_customfields",
     authMethod: "oauth",
     needsCloudId: true,
@@ -268,6 +266,9 @@ export const customFieldTools = (): AnyToolDef[] => [
           z.object({
             value: z.string().min(1),
             disabled: z.boolean().optional(),
+            // Present => update this existing option (PUT). Absent => create a new one (POST).
+            id: z.string().optional(),
+            // Optional cascading-select parent option id (create only).
             optionId: z.string().optional(),
           }),
         )
@@ -275,18 +276,21 @@ export const customFieldTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
-      const before = await ctx.client
-        .jira()
-        .get<unknown>(
-          `/rest/api/3/field/${encodeURIComponent(input.fieldId)}/context/${encodeURIComponent(
-            input.contextId,
-          )}/option`,
-        );
+      const c = ctx.client.jira();
+      const optionPath = `/rest/api/3/field/${encodeURIComponent(input.fieldId)}/context/${encodeURIComponent(
+        input.contextId,
+      )}/option`;
+      const before = await c.get<unknown>(optionPath);
+      // The Jira API splits create vs update: POST creates options (no id), PUT
+      // updates existing ones by required `id`. A single "replace" call cannot
+      // do both, so we route each option to the correct verb.
+      const toCreate = input.options.filter((o) => !o.id);
+      const toUpdate = input.options.filter((o) => o.id);
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "customfields.setCustomFieldOptions",
         target: { kind: "custom_field_context_options", id: input.contextId, parent: input.fieldId },
         before: before.data,
-        after: { options: input.options },
+        after: { create: toCreate, update: toUpdate },
       });
       if (dry) return dry;
       const entry = await ctx.journalOp({
@@ -295,22 +299,30 @@ export const customFieldTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "custom_field_context_options", id: input.contextId, parent: input.fieldId },
         before: before.data,
-        request: { options: input.options } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Re-issue setCustomFieldOptions with the captured `before.options`.",
+        request: { create: toCreate.length, update: toUpdate.length } as Record<string, unknown>,
+        revertible: false,
         run: async () => {
-          const resp = await ctx.client
-            .jira()
-            .put<unknown>(
-              `/rest/api/3/field/${encodeURIComponent(input.fieldId)}/context/${encodeURIComponent(
-                input.contextId,
-              )}/option`,
-              { options: input.options },
-            );
-          return resp.data;
+          const results: Record<string, unknown> = {};
+          if (toCreate.length > 0) {
+            const resp = await c.post<unknown>(optionPath, {
+              options: toCreate.map((o) => ({
+                value: o.value,
+                disabled: o.disabled,
+                ...(o.optionId ? { optionId: o.optionId } : {}),
+              })),
+            });
+            results.created = resp.data;
+          }
+          if (toUpdate.length > 0) {
+            const resp = await c.put<unknown>(optionPath, {
+              options: toUpdate.map((o) => ({ id: o.id, value: o.value, disabled: o.disabled })),
+            });
+            results.updated = resp.data;
+          }
+          return results;
         },
       });
-      return { ok: true, journal_id: entry.opId };
+      return { ok: true, journal_id: entry.opId, result: entry.after };
     },
   }),
 ];

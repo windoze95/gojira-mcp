@@ -5,11 +5,20 @@ import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryR
 import { reverters } from "../../operations/revert.js";
 
 /**
- * Jira Automation rules are managed via /rest/cb-automation/ on the tenant.
- * The exact URL shape varies between cloud generations; we use the public
- * REST surface where stable and fall back to v2 where v3 isn't available.
+ * Jira Cloud Automation rules, via the Automation public REST API:
+ *   api.atlassian.com/automation/public/jira/{cloudId}/rest/v1/rule...
+ * (ctx.client.automation()). The previous code used /rest/cb-automation, which
+ * is a Jira Data Center internal path that does not exist on Cloud.
+ *
+ * IMPORTANT — scope caveat: the Automation public API requires the automation
+ * OAuth scope, which is NOT offered to standard 3LO OAuth apps (there is no
+ * Automation entry in the developer-console scope list, and a classic-scope
+ * token gets 401 "scope does not match"). It generally requires a Connect/Forge
+ * app credential. These endpoints could NOT be live-verified here; if your
+ * deployment's credential cannot reach the automation API, DISABLE this group by
+ * removing read_automation/write_automation from GOJIRA_ENABLED_GROUPS.
  */
-const BASE = "/rest/cb-automation/latest";
+const BASE = "";
 
 export const automationTools = (): AnyToolDef[] => [
   defineTool({
@@ -29,10 +38,8 @@ export const automationTools = (): AnyToolDef[] => [
       p.set("startAt", String(input.startAt ?? 0));
       p.set("maxResults", String(input.maxResults ?? 50));
       if (input.query) p.set("query", input.query);
-      const path = input.projectKey
-        ? `${BASE}/project/${encodeURIComponent(input.projectKey)}/rules?${p.toString()}`
-        : `${BASE}/rules?${p.toString()}`;
-      const resp = await ctx.client.jira().get<unknown>(path);
+      if (input.projectKey) p.set("projectId", input.projectKey);
+      const resp = await ctx.client.automation().get<unknown>(`${BASE}/rule?${p.toString()}`);
       return resp.data;
     },
   }),
@@ -45,7 +52,7 @@ export const automationTools = (): AnyToolDef[] => [
     needsCloudId: true,
     input: { ruleId: z.string().min(1) },
     handler: async (input, ctx) => {
-      const resp = await ctx.client.jira().get<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`);
+      const resp = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
       return resp.data;
     },
   }),
@@ -71,9 +78,6 @@ export const automationTools = (): AnyToolDef[] => [
         after: input.rule,
       });
       if (dry) return dry;
-      const path = input.projectKey
-        ? `${BASE}/project/${encodeURIComponent(input.projectKey)}/rules`
-        : `${BASE}/rules`;
       const entry = await ctx.journalOp({
         accountId: ctx.accountId,
         tool: "automation.createAutomationRule",
@@ -83,14 +87,13 @@ export const automationTools = (): AnyToolDef[] => [
         request: { projectKey: input.projectKey, rule: input.rule } as Record<string, unknown>,
         revertible: true,
         revertHint: "DELETE the rule by id.",
+        deriveTargetId: (after) => (after as { id?: string })?.id,
         run: async () => {
-          const resp = await ctx.client.jira().post<{ id: string }>(path, input.rule);
+          const resp = await ctx.client.automation().post<{ id: string }>(`${BASE}/rule`, input.rule);
           return resp.data;
         },
       });
-      const created = entry.after as { id?: string };
-      if (created?.id) entry.target = { ...entry.target, id: created.id };
-      return { ok: true, journal_id: entry.opId, rule: created };
+      return { ok: true, journal_id: entry.opId, rule: entry.after };
     },
   }),
 
@@ -107,7 +110,7 @@ export const automationTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
-      const before = await ctx.client.jira().get<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`);
+      const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "automation.updateAutomationRule",
         target: { kind: "automation_rule", id: input.ruleId },
@@ -125,7 +128,7 @@ export const automationTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "PUT the captured `before` payload back to the same rule id.",
         run: async () => {
-          const resp = await ctx.client.jira().put<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`, input.rule);
+          const resp = await ctx.client.automation().put<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`, input.rule);
           return resp.data;
         },
       });
@@ -142,7 +145,7 @@ export const automationTools = (): AnyToolDef[] => [
     destructive: true,
     input: { ruleId: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
-      const before = await ctx.client.jira().get<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`);
+      const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
       if (input.commit !== true) {
         return buildDeleteDryRun({
           tool: "automation.deleteAutomationRule",
@@ -159,7 +162,7 @@ export const automationTools = (): AnyToolDef[] => [
         request: { ruleId: input.ruleId } as Record<string, unknown>,
         revertible: false,
         run: async () => {
-          await ctx.client.jira().delete<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`);
+          await ctx.client.automation().delete<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
           return { deleted: input.ruleId };
         },
       });
@@ -176,7 +179,7 @@ export const automationTools = (): AnyToolDef[] => [
     destructive: true,
     input: { ruleId: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
-      const before = await ctx.client.jira().get<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`);
+      const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "automation.enableAutomationRule",
         target: { kind: "automation_rule", id: input.ruleId },
@@ -194,8 +197,8 @@ export const automationTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "Call disableAutomationRule on the same id.",
         run: async () => {
-          const resp = await ctx.client.jira().post<unknown>(
-            `${BASE}/rules/${encodeURIComponent(input.ruleId)}/enable`,
+          const resp = await ctx.client.automation().post<unknown>(
+            `${BASE}/rule/${encodeURIComponent(input.ruleId)}/enable`,
           );
           return resp.data;
         },
@@ -213,7 +216,7 @@ export const automationTools = (): AnyToolDef[] => [
     destructive: true,
     input: { ruleId: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
-      const before = await ctx.client.jira().get<unknown>(`${BASE}/rules/${encodeURIComponent(input.ruleId)}`);
+      const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "automation.disableAutomationRule",
         target: { kind: "automation_rule", id: input.ruleId },
@@ -231,8 +234,8 @@ export const automationTools = (): AnyToolDef[] => [
         revertible: true,
         revertHint: "Call enableAutomationRule on the same id.",
         run: async () => {
-          const resp = await ctx.client.jira().post<unknown>(
-            `${BASE}/rules/${encodeURIComponent(input.ruleId)}/disable`,
+          const resp = await ctx.client.automation().post<unknown>(
+            `${BASE}/rule/${encodeURIComponent(input.ruleId)}/disable`,
           );
           return resp.data;
         },
@@ -257,8 +260,8 @@ export const automationTools = (): AnyToolDef[] => [
         startAt: String(input.startAt ?? 0),
         maxResults: String(input.maxResults ?? 50),
       });
-      const resp = await ctx.client.jira().get<unknown>(
-        `${BASE}/rules/${encodeURIComponent(input.ruleId)}/audit-log?${p.toString()}`,
+      const resp = await ctx.client.automation().get<unknown>(
+        `${BASE}/rule/${encodeURIComponent(input.ruleId)}/audit-log?${p.toString()}`,
       );
       return resp.data;
     },
@@ -271,7 +274,7 @@ export const automationTools = (): AnyToolDef[] => [
     authMethod: "oauth",
     needsCloudId: true,
     handler: async (_input, ctx) => {
-      const resp = await ctx.client.jira().get<unknown>(`${BASE}/usage`);
+      const resp = await ctx.client.automation().get<unknown>(`${BASE}/usage`);
       return resp.data;
     },
   }),
@@ -281,7 +284,7 @@ reverters.register("automation.createAutomationRule", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
   const id = (entry.target as { id?: string }).id;
   if (!id) throw new Error("Cannot revert: created rule id missing.");
-  await ctx.client.jira().delete<unknown>(`${BASE}/rules/${encodeURIComponent(id)}`);
+  await ctx.client.automation().delete<unknown>(`${BASE}/rule/${encodeURIComponent(id)}`);
   return { deleted: id };
 });
 
@@ -289,7 +292,7 @@ reverters.register("automation.disableAutomationRule", async (entry, anyCtx) => 
   const ctx = anyCtx as import("../types.js").ToolContext;
   const id = (entry.target as { id?: string }).id;
   if (!id) throw new Error("Cannot revert: rule id missing.");
-  const resp = await ctx.client.jira().post<unknown>(`${BASE}/rules/${encodeURIComponent(id)}/enable`);
+  const resp = await ctx.client.automation().post<unknown>(`${BASE}/rule/${encodeURIComponent(id)}/enable`);
   return { enabled: id, response: resp.data };
 });
 
@@ -297,6 +300,6 @@ reverters.register("automation.enableAutomationRule", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
   const id = (entry.target as { id?: string }).id;
   if (!id) throw new Error("Cannot revert: rule id missing.");
-  const resp = await ctx.client.jira().post<unknown>(`${BASE}/rules/${encodeURIComponent(id)}/disable`);
+  const resp = await ctx.client.automation().post<unknown>(`${BASE}/rule/${encodeURIComponent(id)}/disable`);
   return { disabled: id, response: resp.data };
 });

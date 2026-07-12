@@ -243,6 +243,9 @@ export function assetsBase(workspaceId: string): string {
 export function adminBase(): string {
   return `${ATLASSIAN_API_HOST}/admin/v1`;
 }
+export function automationBase(cloudId: string): string {
+  return `${ATLASSIAN_API_HOST}/automation/public/jira/${cloudId}/rest/v1`;
+}
 export function atlassianApiBase(): string {
   return ATLASSIAN_API_HOST;
 }
