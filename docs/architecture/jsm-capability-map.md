@@ -26,15 +26,33 @@ Connect/Forge app credential · **UI** = no public API at any auth level.
 | Confluence spaces/pages | REST‑OAuth | needs granular `space`/`page` scopes |
 | **Portal request forms + IT‑support forms** | REST‑OAuth | JSM **Forms API** (`api.atlassian.com/jira/forms/cloud/{cloudId}`) — endpoint exists (401 = needs the Forms scope). Wireable once the scope is added. |
 
-## ❌ NOT reachable by any credential gojira can hold
+## ✅ Automation rules — reachable via REST (corrected finding)
 
-Verified 404 with a full‑permission admin token **and** no matching OAuth scope:
+Earlier this was listed as "Forge only." That was **wrong** — it failed because I
+used the wrong credential. Verified live:
+
+- The GA **Automation Rule Management API** (`api.atlassian.com/automation/public/jira/{cloudId}/rest/v1`)
+  authenticates with an **API token used as a Bearer** — NOT OAuth 3LO (a 3LO
+  token gets `401 scope does not match`; there is no automation OAuth scope), and
+  NOT Basic auth (the gateway rejects it).
+- On the real endpoints (from the OpenAPI spec — list is `GET /rule/summary`,
+  get/update/delete are `/rule/{uuid}`, enable/disable is `PUT /rule/{uuid}/state`)
+  the token is **accepted** — responses are 403 (permission), never 401/404.
+- The 403 clears once the token's account is a **Jira administrator**
+  (jira-admins group). Gotcha: create the token **after** granting admin — a
+  token minted earlier carries a stale permission snapshot.
+
+gojira's `automation.*` tools now use the bound API token as a bearer against the
+correct endpoints. **No Forge app is required.**
+
+## ❌ NOT reachable by any credential (UI-only)
+
+Verified 404 with a full-permission admin token and no matching scope:
 
 | Capability | Reality | Only viable path |
 |---|---|---|
-| **Automation rules** ("business rules") | The automation public API rejects both OAuth (no scope exists — checked all 399 granular Jira scopes) and the admin API token (404 on every host). | A **Forge/Connect app** (authenticates as an app, not a user). |
 | **SLA goal/calendar configuration** | 404. No REST endpoint. (SLA *state* per request is readable.) | UI, or possibly ScriptRunner. |
-| **Email‑to‑request channel** setup | 404. No REST endpoint. | UI. |
+| **Email-to-request channel** setup | 404. No REST endpoint. | UI. |
 | **Portal branding / settings** | 404. No REST endpoint. | UI. |
 
 ## Why UI automation isn't a clean fix
@@ -50,13 +68,13 @@ genuinely **operator‑in‑the‑loop** tasks, not autonomous ones.
 1. **Ship the verified REST core** (everything in the ✅ table) — this is the bulk
    of daily JSM admin and it works today.
 2. **Wire the Forms tools** (add the Forms scope; the API is there).
-3. **Automation rules → a Forge companion app** — the one reliable programmatic
-   path. Deployed per org, it authenticates as an app and can manage automation.
-   A real follow‑up project, not a gojira REST tool.
+3. **Automation rules → the REST tools already in gojira** (`automation.*`). The
+   operator binds an API token whose account is a Jira admin. **No Forge app.**
 4. **SLA config / email channel / portal branding → operator‑guided.** gojira can
    *read* and *validate* these and generate precise setup steps; a human applies
    them in the UI. These are rare one‑time setup tasks.
 
-The honest bottom line: **~80% of "everything in JSM" is reliable API today; the
-rest is a Forge app (automation) plus a handful of one‑time UI tasks that no
-integration can safely automate unattended.**
+The honest bottom line: **~90% of "everything in JSM" is reliable API today —
+including automation rules — leaving only a handful of one‑time UI tasks (SLA
+config, email channel, portal branding) that no integration can safely automate
+unattended.**
