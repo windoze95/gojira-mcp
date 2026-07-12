@@ -19,8 +19,8 @@ session, not as a replacement.
 | **Transport** | StreamableHTTP, per-session in-memory |
 | **Auth** | OAuth 2.1 to MCP clients; OAuth 2.0 3LO to Atlassian; per-user API token side-channel; org-admin API token (separate gate) |
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
-| **Tool count** | 170 across 13 permission groups |
-| **Tests** | 40 unit tests covering auth, consent, journal, rate-limiting, and site-pinning paths |
+| **Tool count** | ~140 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
+| **Tests** | 55 unit tests covering auth, consent, journal, rate-limiting, retry, org-admin gate, and site-pinning paths |
 
 ---
 

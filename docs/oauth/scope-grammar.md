@@ -54,6 +54,29 @@ ATLASSIAN_OAUTH_SCOPES=... \
 Atlassian validates each scope at consent time; users see a consent
 screen listing exactly what they're granting.
 
+## Endpoints that need GRANULAR scopes (not classic)
+
+Some tool groups call newer APIs that only honor Atlassian **granular** scopes.
+Classic scopes return `401 "scope does not match"` on these. Add the granular
+scopes alongside the classic ones where you enable the group:
+
+- **Confluence space reads (v2)** — `confluence.listConfluenceSpaces`,
+  `getConfluenceSpace`, `listSpacePermissions`, and the space update/delete
+  before-snapshots hit `/wiki/api/v2/spaces*`. Add
+  `read:space:confluence`, `read:space.permission:confluence`.
+  (The v1 space *writes* still use classic `write:confluence-space`.)
+- **Assets / CMDB** — every `assets.*` tool authenticates with the OAuth bearer
+  against `api.atlassian.com/jsm/assets/...`. Add
+  `read:cmdb-object:jira`, `write:cmdb-object:jira`,
+  `read:cmdb-schema:jira`, `write:cmdb-schema:jira`.
+- **Jira automation** — the automation public API requires the automation scope,
+  which standard 3LO apps cannot request (there is no Automation entry in the
+  developer-console scope list). `read_automation`/`write_automation` therefore
+  only work with a Connect/Forge-distributed credential; otherwise disable them.
+
+These map to real API limits, not gojira config — see the header comments in
+`src/tools/defs/confluence.ts`, `assets.ts`, and `automation.ts`.
+
 ## See also
 
 - [Permission groups](../tools/permission-groups.md) — the operator-allowlist model
