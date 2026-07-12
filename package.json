@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "generate-key": "tsx scripts/generate-encryption-key.ts",
     "preflight": "bash scripts/preflight.sh",
-    "docs:tools": "tsx scripts/gen-tool-docs.ts"
+    "docs:tools": "tsx scripts/gen-tool-docs.ts",
+    "e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",

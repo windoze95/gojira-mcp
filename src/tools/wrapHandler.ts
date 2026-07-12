@@ -19,6 +19,7 @@ import {
   InsufficientPermissionsError,
   RateLimitedError,
   ToolError,
+  ValidationError,
   handleToolError,
 } from "../middleware/errorHandler.js";
 import { logger } from "../utils/logger.js";
@@ -204,7 +205,20 @@ export function registerWrappedTool(
           },
         };
 
-        const parsed = schemaAsObject.parse(args ?? {});
+        // Map input-schema failures to VALIDATION_ERROR — a bare ZodError would
+        // fall through to the generic handler and surface as UNEXPECTED_ERROR
+        // with a reference id, which reads like a server fault instead of
+        // telling the caller what's wrong with their arguments.
+        const parseResult = schemaAsObject.safeParse(args ?? {});
+        if (!parseResult.success) {
+          throw new ValidationError("Invalid tool input.", {
+            issues: parseResult.error.issues.map((i) => ({
+              path: i.path.join("."),
+              message: i.message,
+            })),
+          });
+        }
+        const parsed = parseResult.data;
         let result: unknown;
         try {
           result = await def.handler(parsed, ctx);
@@ -403,6 +417,10 @@ function makeClientFactories(opts: {
       return new AtlassianClient({
         baseURL: `https://${site}`,
         auth: { apiToken: t },
+        // Several JSM admin endpoints these tools rely on (request-type
+        // create/delete among them) are gated behind the experimental opt-in
+        // and 412 without it. The header is inert on stable endpoints.
+        extraHeaders: { "X-ExperimentalApi": "opt-in" },
         onCallMeta,
       });
     },
