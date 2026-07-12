@@ -384,14 +384,18 @@ function makeClientFactories(opts: {
 
   // Fail closed when the bound token belongs to a different site than the call
   // targets — API tokens are account-global, so without this the call would
-  // silently hit the wrong tenant. A binding with no cloud_id is still allowed:
-  // it predates/omits site discovery and is not evidence of another tenant.
+  // silently hit the wrong tenant. bindApiToken now always stores the cloudId it
+  // verified against the site's tenant_info, so when an expected cloudId is known
+  // we require the binding to carry a matching one and fail closed on a mismatch
+  // OR a missing cloudId — a null here would otherwise let a stale/hand-written
+  // binding route the (site_url-based) client past the pin.
   const assertApiTokenTenant = (expectedCloudId: string | null): void => {
+    if (!expectedCloudId) return; // nothing to pin to (unpinned, cloudId-less tool)
     const boundCloudId = credentials.apiToken?.cloud_id ?? null;
-    if (expectedCloudId && boundCloudId && boundCloudId !== expectedCloudId) {
+    if (boundCloudId !== expectedCloudId) {
       throw new ToolError(
         "VALIDATION_ERROR",
-        "The bound API token belongs to a different cloudId than this call resolves to. Re-bind the token for this site or pin the cloudId.",
+        "The bound API token's cloudId does not match this call's tenant (or is missing). Re-bind the token for this site via gojira.bindApiToken.",
       );
     }
   };

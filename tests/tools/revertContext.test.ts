@@ -83,12 +83,14 @@ describe("automation() client factory tenant guard", () => {
     expect(() => factories("cloud-1", "cloud-1").automation()).not.toThrow();
   });
 
-  it("builds the automation client when the token binding has no cloud_id", () => {
-    expect(() => factories(null, "cloud-1").automation()).not.toThrow();
+  it("fails closed when the bound token has no cloud_id but a tenant is resolved", () => {
+    // bindApiToken now always stores a verified cloudId, so a null here means a
+    // stale/hand-written binding — the guard must not route it past the pin.
+    expect(() => factories(null, "cloud-1").automation()).toThrow(/does not match|missing/);
   });
 
   it("fails closed when the token is bound to a different cloudId", () => {
-    expect(() => factories("cloud-2", "cloud-1").automation()).toThrow(/different cloudId/);
+    expect(() => factories("cloud-2", "cloud-1").automation()).toThrow(/does not match|missing/);
   });
 
   it("requires a cloudId at all", () => {
