@@ -60,8 +60,11 @@ export function mapAtlassianError(
       const messages = extractMessages(body);
       if (adminOrg) {
         return new InsufficientPermissionsError(
-          "Caller is not an organization admin.",
-          { upstream: messages, hint: "Org admin tools require the caller's accountId to appear in /admin/v1/orgs/<orgId>/users?role=admin" },
+          "Caller is not an organization admin, or the org-admin token lacks the required scope.",
+          {
+            upstream: messages,
+            hint: "Ensure the caller's accountId is in GOJIRA_ORG_ADMIN_ACCOUNT_IDS and GOJIRA_ORG_ADMIN_TOKEN has org-admin scope.",
+          },
         );
       }
       const flat = (messages ?? []).join(" ");

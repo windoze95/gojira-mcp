@@ -39,7 +39,7 @@ describe("mapAtlassianError (D7)", () => {
     expect(e).toBeInstanceOf(InsufficientPermissionsError);
     expect(e.message).toMatch(/organization admin/i);
     const details = e.details as { hint?: string };
-    expect(details.hint).toMatch(/org admin/i);
+    expect(details.hint).toMatch(/GOJIRA_ORG_ADMIN_ACCOUNT_IDS/);
   });
 
   it("404 → NOT_FOUND", () => {

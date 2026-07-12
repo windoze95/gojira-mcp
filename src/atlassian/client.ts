@@ -5,6 +5,12 @@ import { withRetry, type RetryOptions } from "./retry.js";
 
 const ATLASSIAN_API_HOST = "https://api.atlassian.com";
 
+const IDEMPOTENT_METHODS = new Set(["GET", "PUT", "DELETE", "HEAD", "OPTIONS"]);
+
+function isTransportError(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && ("code" in err || err instanceof Error));
+}
+
 export interface AtlassianRequestMeta {
   /** Indicates whether headers signal the bucket is nearly drained. */
   nearLimit: boolean;
@@ -73,8 +79,30 @@ export class AtlassianClient {
     });
   }
 
-  request<T>(cfg: AxiosRequestConfig): Promise<AtlassianResponse<T>> {
-    return withRetry(() => this.execute<T>(cfg), this.retry);
+  async request<T>(cfg: AxiosRequestConfig): Promise<AtlassianResponse<T>> {
+    const method = (cfg.method ?? "GET").toUpperCase();
+    const idempotent = IDEMPOTENT_METHODS.has(method);
+    try {
+      return await withRetry(() => this.execute<T>(cfg), this.retry, { idempotent });
+    } catch (err) {
+      // AtlassianApiError already carries a mappable status. A raw transport
+      // error that survived retries is normalized to status 0 so the error
+      // mapper reports UPSTREAM_UNAVAILABLE instead of a generic UNEXPECTED_ERROR.
+      if (err instanceof AtlassianApiError) throw err;
+      if (isTransportError(err)) {
+        const e = err as { message?: string; code?: string };
+        throw new AtlassianApiError(
+          0,
+          { message: e.message, code: e.code },
+          `Atlassian API unreachable: ${e.code ?? e.message ?? "network error"}`,
+          null,
+          false,
+          null,
+          `${method} ${cfg.url ?? ""}`,
+        );
+      }
+      throw err;
+    }
   }
 
   get<T>(path: string, cfg?: AxiosRequestConfig): Promise<AtlassianResponse<T>> {

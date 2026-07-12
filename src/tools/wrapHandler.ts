@@ -49,6 +49,12 @@ export function registerWrappedTool(
     async (args: unknown, extra: { authInfo?: { extra?: Record<string, unknown>; clientId?: string } }) => {
       const start = Date.now();
       const operationId = randomUUID();
+      // Tracks the cloudId once resolved so a failure after resolution still
+      // audits the real target (not null).
+      let resolvedCloudId: string | null = null;
+      // Correlates journal opIds with this call's audit operation_id. The first
+      // journaled mutation reuses operationId; extras get a deterministic suffix.
+      let journalSeq = 0;
       const authInfo = extra.authInfo;
       const accountId =
         (authInfo?.extra && typeof authInfo.extra.accountId === "string"
@@ -125,6 +131,7 @@ export function registerWrappedTool(
         // Resolve credentials + cloudId.
         const credentials = await resolveCredentials(def, deps, accountId);
         const cloudId = resolveCloudId(def, deps.config, credentials);
+        resolvedCloudId = cloudId;
 
         // Build per-call client factories.
         const clientFactories = makeClientFactories({
@@ -157,7 +164,9 @@ export function registerWrappedTool(
             cloudId,
           },
           async journalOp(jArgs) {
-            const opId = await deps.journal.begin(jArgs);
+            const correlatedId = journalSeq === 0 ? operationId : `${operationId}.${journalSeq}`;
+            journalSeq += 1;
+            const opId = await deps.journal.begin(jArgs, correlatedId);
             let outcome: "success" | "failure" = "success";
             let error: { code: string; message: string } | undefined;
             let after: unknown = null;
@@ -205,7 +214,7 @@ export function registerWrappedTool(
         return toolResult({ success: true, result }, false);
       } catch (err) {
         const requestForAudit = sanitizeRequest(args);
-        return fail(err, requestForAudit, null);
+        return fail(err, requestForAudit, resolvedCloudId);
       }
     },
   );

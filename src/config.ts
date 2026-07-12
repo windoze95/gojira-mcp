@@ -68,6 +68,19 @@ const ConfigSchema = z
     GOJIRA_ENABLE_ORG_ADMIN: truthy.default("false"),
     GOJIRA_ORG_ADMIN_TOKEN: z.string().optional(),
     GOJIRA_ORG_ID: z.string().optional(),
+    // Explicit allowlist of Atlassian accountIds permitted to invoke admin_org
+    // tools. There is no reliable public endpoint to enumerate an org's admins,
+    // so caller-verification is operator-declared: only accounts listed here
+    // pass the org-admin gate. Empty (with org admin enabled) fails closed.
+    GOJIRA_ORG_ADMIN_ACCOUNT_IDS: z
+      .string()
+      .optional()
+      .transform((v) =>
+        (v ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
 
     // Audit
     GOJIRA_AUDIT_LOG_TARGET: auditTarget.default("stdout"),
@@ -126,7 +139,21 @@ const ConfigSchema = z
       message:
         "GOJIRA_ORG_ADMIN_TOKEN and GOJIRA_ORG_ID are required when GOJIRA_ENABLE_ORG_ADMIN=true",
     },
-  );
+  )
+  .refine(
+    (v) => !v.GOJIRA_ENABLE_ORG_ADMIN || v.GOJIRA_ORG_ADMIN_ACCOUNT_IDS.length > 0,
+    {
+      message:
+        "GOJIRA_ORG_ADMIN_ACCOUNT_IDS must list at least one Atlassian accountId when " +
+        "GOJIRA_ENABLE_ORG_ADMIN=true — org-admin caller verification is operator-declared " +
+        "(there is no public endpoint to enumerate org admins). Fails closed otherwise.",
+    },
+  )
+  .refine((v) => v.NODE_ENV !== "production" || !!v.MCP_SERVER_URL, {
+    message:
+      "MCP_SERVER_URL must be set explicitly when NODE_ENV=production — otherwise OAuth " +
+      "callback/issuer URLs silently point at http://localhost, breaking the consent flow.",
+  });
 
 export type AppConfig = Readonly<{
   nodeEnv: "development" | "test" | "production";
@@ -150,6 +177,8 @@ export type AppConfig = Readonly<{
     enabled: boolean;
     token: string | null;
     orgId: string | null;
+    /** Operator-declared allowlist of accountIds permitted to use admin_org tools. */
+    adminAccountIds: string[];
   };
   audit: {
     mainTarget: string;
@@ -169,7 +198,14 @@ let cached: AppConfig | null = null;
 
 export function loadConfig(): AppConfig {
   if (cached) return cached;
-  const parsed = ConfigSchema.safeParse(process.env);
+  // Treat empty-string env vars as unset. Copying `.env.example` leaves several
+  // optional keys as `KEY=`, which would otherwise fail `.url()`/format refinements
+  // instead of falling through to their defaults.
+  const cleanedEnv: Record<string, string | undefined> = {};
+  for (const [k, val] of Object.entries(process.env)) {
+    cleanedEnv[k] = val === "" ? undefined : val;
+  }
+  const parsed = ConfigSchema.safeParse(cleanedEnv);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
@@ -208,6 +244,7 @@ export function loadConfig(): AppConfig {
       enabled: v.GOJIRA_ENABLE_ORG_ADMIN,
       token: v.GOJIRA_ORG_ADMIN_TOKEN ?? null,
       orgId: v.GOJIRA_ORG_ID ?? null,
+      adminAccountIds: v.GOJIRA_ORG_ADMIN_ACCOUNT_IDS,
     },
     audit: {
       mainTarget: v.GOJIRA_AUDIT_LOG_TARGET,

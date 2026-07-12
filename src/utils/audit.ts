@@ -67,12 +67,33 @@ export class AuditSink {
       }
       if (target.startsWith("syslog:")) {
         // Best-effort syslog over UDP (RFC 3164 — basic facility/severity prefix).
-        const facility = target.slice("syslog:".length) || "user";
-        const facCode = facilityCode(facility);
+        // Target grammar: `syslog:<facility>` or `syslog:<facility>@<host>:<port>`
+        // (defaults 127.0.0.1:514). The container's collector is rarely on
+        // loopback, so the host must be configurable.
+        const spec = target.slice("syslog:".length);
+        const [facility, hostPort] = spec.split("@", 2);
+        let host = "127.0.0.1";
+        let port = 514;
+        if (hostPort) {
+          const idx = hostPort.lastIndexOf(":");
+          if (idx > -1) {
+            host = hostPort.slice(0, idx) || host;
+            const p = Number(hostPort.slice(idx + 1));
+            if (Number.isFinite(p) && p > 0) port = p;
+          } else {
+            host = hostPort;
+          }
+        }
+        const facCode = facilityCode(facility || "user");
         const pri = facCode * 8 + 6; // severity 6 (informational)
-        const msg = `<${pri}>${new Date().toISOString()} gojira-mcp ${JSON.stringify(event)}`;
+        // Encode as a Buffer and send its byte length — `msg.length` counts UTF-16
+        // code units and truncates any multi-byte content.
+        const buf = Buffer.from(
+          `<${pri}>${new Date().toISOString()} gojira-mcp ${JSON.stringify(event)}`,
+          "utf8",
+        );
         const sock = createSocket("udp4");
-        sock.send(msg, 0, msg.length, 514, "127.0.0.1", () => sock.close());
+        sock.send(buf, 0, buf.length, port, host, () => sock.close());
         return;
       }
       // Unknown scheme — log and drop.
