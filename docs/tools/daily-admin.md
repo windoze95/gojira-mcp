@@ -5,7 +5,7 @@ Assets/Insight CMDB, Jira automation rules, custom fields, and the safe
 project-management surface (create + archive; delete is in its own group
 covered in [schemes-and-workflows.md](schemes-and-workflows.md)).
 
-Roughly 95 tools across 10 permission groups. The auto-generated
+Roughly 60 tools across 10 permission groups. The auto-generated
 [catalog](catalog.md) lists every tool with its full input schema.
 
 ## JSM admin (`read_jsm_admin` / `write_jsm_admin`)
@@ -21,42 +21,28 @@ called first per user).
 - `jsm.listRequestTypes(serviceDeskId, groupId?)`.
 - `jsm.getRequestType(serviceDeskId, requestTypeId)`.
 - `jsm.createRequestType(serviceDeskId, issueTypeId, name, description?, helpText?)` — destructive, revertible.
-- `jsm.updateRequestType(serviceDeskId, requestTypeId, name?, description?, helpText?)` — destructive, revertible.
 - `jsm.deleteRequestType(serviceDeskId, requestTypeId)` — destructive, **irreversible**.
 - `jsm.getRequestTypeFields(serviceDeskId, requestTypeId)`.
-- `jsm.setRequestTypeFields(serviceDeskId, requestTypeId, fields[])` — destructive, revertible.
 - `jsm.getRequestTypeGroups(serviceDeskId)`.
-- `jsm.assignRequestTypeToGroup(serviceDeskId, requestTypeId, groupId)` — destructive.
 
-### Queues
+### Queues (read-only — the public API has no queue writes)
 - `jsm.listQueues(serviceDeskId)`.
 - `jsm.getQueue(serviceDeskId, queueId)`.
-- `jsm.createQueue(serviceDeskId, name, jql, fields?)` — destructive, revertible.
-- `jsm.updateQueue(serviceDeskId, queueId, name?, jql?, fields?)` — destructive, revertible.
-- `jsm.deleteQueue(serviceDeskId, queueId)` — destructive, irreversible.
 - `jsm.getQueueIssues(serviceDeskId, queueId, start?, limit?)`.
 
-### SLAs
-- `jsm.listSlas(projectKey)`.
-- `jsm.getSla(projectKey, slaId)`.
-- `jsm.createSla(projectKey, sla)` — destructive.
-- `jsm.updateSla(projectKey, slaId, sla)` — destructive, revertible.
-- `jsm.getSlaMetrics(projectKey, since?, until?, metricIds?)`.
-
-### Organizations & portals
+### SLA state, organizations & KB
+- `jsm.getRequestSla(requestIdOrKey)` — per-request SLA *state* (SLA goal
+  *configuration* has no public API; see the
+  [capability map](../architecture/jsm-capability-map.md)).
 - `jsm.listJsmOrganizations(serviceDeskId?)`.
-- `jsm.addCustomersToOrganization(organizationId, usernames?, accountIds?)` — destructive.
-- `jsm.listPortals` — alias for the service-desk listing.
-- `jsm.getPortalCustomization(serviceDeskId)`.
-- `jsm.updatePortalCustomization(serviceDeskId, announcement?)` — destructive, revertible.
+- `jsm.addCustomersToOrganization(organizationId, accountIds)` — destructive.
+- `jsm.removeCustomersFromOrganization(organizationId, accountIds)` — destructive.
+- `jsm.searchKnowledgeBaseArticles(serviceDeskId, query)`.
 
-### Forms & KB
-- `jsm.listForms(serviceDeskId)`.
-- `jsm.getForm(serviceDeskId, formId)`.
-- `jsm.createForm(serviceDeskId, form)` — destructive.
-- `jsm.updateForm(serviceDeskId, formId, form)` — destructive, revertible.
-- `jsm.getServiceDeskKnowledgeBase(serviceDeskId)`.
-- `jsm.linkKbToServiceDesk(serviceDeskId, spaceKey)` — destructive.
+> Earlier versions also shipped queue/SLA/portal/forms *write* tools — those
+> called endpoints that don't exist in Atlassian Cloud and were removed. What
+> remains is the live-verified surface; portal branding, SLA config, and the
+> email channel are UI-only (capability map).
 
 ## Assets / Insight (`read_assets` / `write_assets`)
 
@@ -100,17 +86,25 @@ required for the workspace-id discovery step (handled automatically).
 
 ## Automation rules (`read_automation` / `write_automation`)
 
-**Credential:** OAuth.
+**Credential:** API token side-channel (`gojira.bindApiToken` must be
+called first per user). The token's account must be a **Jira
+administrator** — a non-admin token gets 403 on every automation call,
+and a token created *before* the admin grant keeps its stale
+permissions, so create the token after the grant. No Forge or Connect
+app is involved: the tools call
+`api.atlassian.com/automation/public/jira/{cloudId}/rest/v1` directly.
 
-- `automation.listAutomationRules(projectKey?, query?, startAt?, maxResults?)`.
-- `automation.getAutomationRule(ruleId)`.
-- `automation.createAutomationRule(projectKey?, rule)` — destructive, revertible.
-- `automation.updateAutomationRule(ruleId, rule)` — destructive, revertible (full-before/full-after).
-- `automation.deleteAutomationRule(ruleId)` — destructive, irreversible.
-- `automation.enableAutomationRule(ruleId)` — destructive, revertible (disable).
-- `automation.disableAutomationRule(ruleId)` — destructive, revertible (enable).
-- `automation.getAutomationRuleAuditLog(ruleId, startAt?, maxResults?)`.
-- `automation.getAutomationUsage` — site-wide automation usage stats.
+- `automation.listAutomationRules(cursor?, limit?)` — paginated rule summaries.
+- `automation.getAutomationRule(ruleId)` — full rule by UUID.
+- `automation.searchManualRules(payload)` — manually-triggerable rules for a given object (e.g. an issue).
+- `automation.searchAutomationTemplates(payload?)` — search the rule-template catalog (pass `{}` for all).
+- `automation.getAutomationTemplate(templateId)`.
+- `automation.createAutomationRule(rule, commit?)` — destructive, revertible (disable, then delete by UUID).
+- `automation.createRuleFromTemplate(templateId, ruleHome, parameters?, commit?)` — destructive, revertible (disable, then delete by UUID). `ruleHome` is the scope ARI, e.g. `ari:cloud:jira:{cloudId}:project/{projectId}`.
+- `automation.updateAutomationRule(ruleId, rule, commit?)` — destructive, revertible (full-before/full-after).
+- `automation.deleteAutomationRule(ruleId, commit?)` — destructive, **irreversible**. Disables the rule first (the API rejects deleting an enabled rule) and re-enables it if the delete fails.
+- `automation.enableAutomationRule(ruleId, commit?)` — destructive, revertible (restores the captured prior state).
+- `automation.disableAutomationRule(ruleId, commit?)` — destructive, revertible (restores the captured prior state).
 
 ## Custom fields (`read_customfields` / `write_customfields`)
 

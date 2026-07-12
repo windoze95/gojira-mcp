@@ -262,7 +262,7 @@ async function resolveCredentials(
   let storedToken: ResolvedCredentials["storedToken"] = null;
   let apiToken: ResolvedCredentials["apiToken"] = null;
 
-  if (def.authMethod === "oauth" || def.authMethod === "api_token") {
+  if (def.authMethod === "oauth" || def.authMethod === "api_token" || def.authMethod === "oauth_or_api_token") {
     try {
       storedToken = await deps.tokenRefresher.ensureFreshToken(accountId);
     } catch (err) {
@@ -276,9 +276,9 @@ async function resolveCredentials(
     }
   }
 
-  if (def.authMethod === "api_token") {
+  if (def.authMethod === "api_token" || def.authMethod === "oauth_or_api_token") {
     apiToken = await deps.apiTokenStore.get(accountId);
-    if (!apiToken) {
+    if (!apiToken && def.authMethod === "api_token") {
       throw new AuthRequiredError(
         "This tool requires a per-user Atlassian API token to be bound first.",
         { auth_method: "api_token", bind_tool: "gojira.bindApiToken" },
@@ -417,9 +417,24 @@ function makeClientFactories(opts: {
     },
     automation: () => {
       if (!cloudId) throw new ToolError("VALIDATION_ERROR", "Tool requires a cloudId");
+      // The GA Automation Rule Management API is on the api.atlassian.com host but
+      // authenticates with the per-user API token via **Basic auth** (email:token)
+      // — verified live: Basic → 200/400, the same token as a Bearer → 403, and
+      // OAuth 3LO → 401 (no automation scope exists). The token's account must
+      // be a Jira administrator (ADMINISTER global permission).
+      const boundCloudId = credentials.apiToken?.cloud_id ?? null;
+      if (boundCloudId && boundCloudId !== cloudId) {
+        // Unpinned deployments: the base URL targets `cloudId` while the token
+        // may be bound to another site. API tokens are account-global, so the
+        // call would silently succeed against the wrong tenant — fail closed.
+        throw new ToolError(
+          "VALIDATION_ERROR",
+          "The bound API token belongs to a different cloudId than this call resolves to. Re-bind the token for this site or pin the cloudId.",
+        );
+      }
       return new AtlassianClient({
         baseURL: automationBase(cloudId),
-        auth: { bearer: oauthBearer() },
+        auth: { apiToken: apiTokenAuth() },
         onCallMeta,
       });
     },

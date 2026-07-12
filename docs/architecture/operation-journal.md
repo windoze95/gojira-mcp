@@ -107,15 +107,24 @@ The flow:
    (auth + rate limit + audit), executing the inverse mutation. **The
    revert itself becomes a new journal entry.**
 
+`gojira.revertOperation` runs with `authMethod: "oauth_or_api_token"` and
+`needsCloudId: true`: it resolves whichever credential the caller has
+(OAuth-backed reverters need the OAuth client; automation reverters need
+the bound API-token client) and always resolves a cloudId. If the journal
+entry's `cloudId` differs from the cloudId the revert call resolves to,
+the revert is refused rather than replayed against the wrong site.
+
 ### Revertible daily-admin operations
 
 | Tool | Inverse |
 |---|---|
 | `projects.archiveJiraProject` | `POST /rest/api/3/project/{key}/restore` |
 | `customfields.createCustomField` | `DELETE /rest/api/3/field/{id}` |
-| `automation.createAutomationRule` | `DELETE` the rule |
-| `automation.disableAutomationRule` | `POST .../enable` |
-| `automation.enableAutomationRule` | `POST .../disable` |
+| `automation.createAutomationRule` | disable, then `DELETE /rule/{uuid}` |
+| `automation.createRuleFromTemplate` | disable, then `DELETE /rule/{uuid}` |
+| `automation.updateAutomationRule` | `PUT` the captured `before` rule back to the same UUID |
+| `automation.enableAutomationRule` | `PUT /rule/{uuid}/state` restoring the captured prior state (`{value: ...}`) |
+| `automation.disableAutomationRule` | `PUT /rule/{uuid}/state` restoring the captured prior state (`{value: ...}`) |
 | `jsm.createQueue` | `DELETE` the queue |
 | `jsm.createRequestType` | `DELETE` the request type |
 

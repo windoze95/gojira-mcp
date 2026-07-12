@@ -74,9 +74,9 @@ check_scope write_assets           "write:cmdb-object:jira"
 check_scope read_jsm_admin         "read:servicedesk-request"
 check_scope read_workflows         "manage:jira-configuration"
 if has read_automation || has write_automation; then
-  ylw "⚠ automation groups enabled: the Jira automation public API is NOT reachable by standard 3LO OAuth apps."
-  ylw "  Disable read_automation/write_automation unless you use a Connect/Forge credential."
-  warn=1
+  ylw "ℹ automation groups enabled: automation tools need a bound per-user API token"
+  ylw "  (gojira.bindApiToken) whose account is a Jira administrator — no OAuth scope"
+  ylw "  covers automation. Non-admin accounts get 403 on every automation call."
 fi
 
 echo "── Production posture ───────────────────────────────"

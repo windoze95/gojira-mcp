@@ -26,15 +26,44 @@ Connect/Forge app credential · **UI** = no public API at any auth level.
 | Confluence spaces/pages | REST‑OAuth | needs granular `space`/`page` scopes |
 | **Portal request forms + IT‑support forms** | REST‑OAuth | JSM **Forms API** (`api.atlassian.com/jira/forms/cloud/{cloudId}`) — endpoint exists (401 = needs the Forms scope). Wireable once the scope is added. |
 
-## ❌ NOT reachable by any credential gojira can hold
+## ✅ Automation rules — reachable via REST (corrected finding)
 
-Verified 404 with a full‑permission admin token **and** no matching OAuth scope:
+Earlier this was listed as "Forge only." That was **wrong** — it failed because I
+used the wrong credential. Verified live:
+
+- The GA **Automation Rule Management API** (`api.atlassian.com/automation/public/jira/{cloudId}/rest/v1`)
+  is on the `api.atlassian.com` host but authenticates with the per-user **API
+  token via Basic auth** (`email:token`) — the same `api_token` mode the JSM
+  tools use. NOT OAuth 3LO (a 3LO token gets `401 scope does not match`; there is
+  no automation OAuth scope), and NOT the token as a Bearer (→ 403).
+- Verified live against the dev tenant — **full lifecycle**: `POST /rule` →
+  **201** `{ruleUuid}` · `GET /rule/summary` → 200 · `GET /rule/{uuid}` → 200
+  (exports the full rule config) · `PUT /rule/{uuid}/state` → 200 ·
+  `DELETE /rule/{uuid}` → 200 → subsequent GET 404 · `POST /template/search`,
+  `GET /template/{id}`, `POST /template/create` → 200 (created a real rule from
+  `itsm_template_38`-class templates).
+- Contract gotchas the OpenAPI spec hides: the state body is
+  `{ "value": "ENABLED"|"DISABLED" }` (a `{state}` key 400s), and DELETE 400s on
+  an ENABLED rule ("Rule cannot be deleted unless it is already disabled") — so
+  delete flows must disable first. Component `value` shapes are undocumented; the
+  practical authoring path is create-from-template (or UI), export via
+  `GET /rule/{uuid}`, and adapt.
+- The one requirement: the token's account must be a **Jira administrator** (holds
+  the `ADMINISTER` global permission). A non-admin account 403s on every call, and
+  a token minted *before* the admin grant keeps its stale permissions — grant
+  first, then create the token.
+
+gojira's `automation.*` tools use the bound API token via Basic auth against these
+endpoints. **No Forge app is required.**
+
+## ❌ NOT reachable by any credential (UI-only)
+
+Verified 404 with a full-permission admin token and no matching scope:
 
 | Capability | Reality | Only viable path |
 |---|---|---|
-| **Automation rules** ("business rules") | The automation public API rejects both OAuth (no scope exists — checked all 399 granular Jira scopes) and the admin API token (404 on every host). | A **Forge/Connect app** (authenticates as an app, not a user). |
 | **SLA goal/calendar configuration** | 404. No REST endpoint. (SLA *state* per request is readable.) | UI, or possibly ScriptRunner. |
-| **Email‑to‑request channel** setup | 404. No REST endpoint. | UI. |
+| **Email-to-request channel** setup | 404. No REST endpoint. | UI. |
 | **Portal branding / settings** | 404. No REST endpoint. | UI. |
 
 ## Why UI automation isn't a clean fix
@@ -50,13 +79,13 @@ genuinely **operator‑in‑the‑loop** tasks, not autonomous ones.
 1. **Ship the verified REST core** (everything in the ✅ table) — this is the bulk
    of daily JSM admin and it works today.
 2. **Wire the Forms tools** (add the Forms scope; the API is there).
-3. **Automation rules → a Forge companion app** — the one reliable programmatic
-   path. Deployed per org, it authenticates as an app and can manage automation.
-   A real follow‑up project, not a gojira REST tool.
+3. **Automation rules → the REST tools already in gojira** (`automation.*`). The
+   operator binds an API token whose account is a Jira admin. **No Forge app.**
 4. **SLA config / email channel / portal branding → operator‑guided.** gojira can
    *read* and *validate* these and generate precise setup steps; a human applies
    them in the UI. These are rare one‑time setup tasks.
 
-The honest bottom line: **~80% of "everything in JSM" is reliable API today; the
-rest is a Forge app (automation) plus a handful of one‑time UI tasks that no
-integration can safely automate unattended.**
+The honest bottom line: **~90% of "everything in JSM" is reliable API today —
+including automation rules — leaving only a handful of one‑time UI tasks (SLA
+config, email channel, portal branding) that no integration can safely automate
+unattended.**

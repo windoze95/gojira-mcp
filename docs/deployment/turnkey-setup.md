@@ -51,7 +51,7 @@ some scopes live under the **Granular scopes** tab.
 | `read_jsm_admin` `write_jsm_admin` | Jira Service Management (classic) | `read:servicedesk-request` `write:servicedesk-request` `manage:servicedesk-customer` |
 | `read_confluence_admin` `write_confluence_admin` | Confluence | **classic:** `read:confluence-space.summary` `write:confluence-space` `read:confluence-content.all` `write:confluence-content` · **granular (required for v2 space reads):** `read:space:confluence` `read:space.permission:confluence` |
 | `read_assets` `write_assets` | Jira → **Granular scopes** (CMDB) | `read:cmdb-object:jira` `write:cmdb-object:jira` `read:cmdb-schema:jira` `write:cmdb-schema:jira` `read:cmdb-type:jira` `write:cmdb-type:jira` `read:cmdb-attribute:jira` `write:cmdb-attribute:jira` |
-| `read_automation` `write_automation` | — | **Not available to standard 3LO apps.** The Jira automation public API needs the automation scope, which the OAuth console does not offer. Leave these groups **disabled** unless you deploy with a Connect/Forge credential. |
+| `read_automation` `write_automation` | — (uses the bound per-user API token, not OAuth) | **No OAuth scope needed or available.** Automation tools authenticate with the API token bound via `gojira.bindApiToken` (Basic auth). Requirement: the token's account must be a **Jira administrator**, or every call 403s. |
 | `admin_org` | — (uses a separate org-admin API key, not OAuth) | See §8. |
 
 `ATLASSIAN_OAUTH_SCOPES` (below) requests a subset of what the app declares — so
@@ -93,7 +93,7 @@ GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_a
 ```
 
 It fails on missing required vars / a bad key, and **warns** when an enabled group
-is missing its scopes, when automation is enabled, or on insecure prod posture
+is missing its scopes, notes the automation-token requirement, or on insecure prod posture
 (`ALLOWED_ORIGINS=*`, `NODE_ENV != production`, plain-http `MCP_SERVER_URL`).
 Get it to "passed" (warnings reviewed) before go-live.
 
@@ -119,16 +119,22 @@ Point your MCP client at `https://<your-host>/mcp`. It auto-discovers the OAuth
 endpoints, walks you through Atlassian consent (you pick the site), and starts
 listing tools. Each upstream call is attributable to the consenting user.
 
-## 9. Bind the JSM/Assets API token (per user, one-time)
+## 9. Bind the API token (per user, one-time)
 
-The `read_jsm_admin` / `write_jsm_admin` tools authenticate with a per-user
-Atlassian **API token** side-channel (not OAuth). Each user runs this once:
+The `read_jsm_admin` / `write_jsm_admin` **and** `read_automation` /
+`write_automation` tools authenticate with a per-user Atlassian **API token**
+side-channel (not OAuth). Each user runs this once:
 
 1. Create a token at <https://id.atlassian.com/manage-profile/security/api-tokens>
    ("Create API token"). Copy it. *(This page requires an emailed one-time
    passcode to your account — a normal Atlassian identity step.)*
 2. In your MCP client, call **`gojira.bindApiToken`** with your Atlassian email
    and the token. gojira encrypts it at rest and discovers your Assets workspace.
+
+For the **automation** groups, the token's account must be a **Jira
+administrator** (see §3) — otherwise every automation call 403s. Grant admin
+*before* creating the token: a token minted before the grant keeps the old
+permissions.
 
 (Assets tools use OAuth + the CMDB scopes from §3, not the API token.)
 
@@ -148,9 +154,11 @@ tools for them (earlier versions shipped tools that 404'd — those were removed
 - JSM **SLA configuration**, **queue** create/update/delete, **portal**
   announcements/branding, **Forms** (a separate product API), knowledge-base
   **linking**. (SLA *state* per request and KB article *search* are available.)
-- Jira **automation** CRUD via standard 3LO OAuth (see §3).
 - Org-level **Marketplace app** management, **domain verification**, **Rovo MCP**
   settings.
+
+(Jira **automation** CRUD *is* available — not via OAuth, but through the bound
+API token; see §3 and `docs/architecture/jsm-capability-map.md`.)
 
 ## 12. Org-admin tools (optional, isolated)
 
@@ -181,5 +189,6 @@ list/get endpoints against your directory type before relying on them.
 | `401 "scope does not match"` on Confluence v2 / Assets | Missing **granular** scope. Add the ones in §3, re-consent. |
 | Tool returns `AUTH_REQUIRED … bind an API token` | JSM tool without a bound token — run `gojira.bindApiToken` (§9). |
 | `UPSTREAM_UNAVAILABLE` | Transient Atlassian/network issue; the client retries idempotent calls automatically. |
-| Automation tools 404/401 | Expected under 3LO — disable `read_automation`/`write_automation` (§3). |
+| Automation tools `403` on every call | The bound API token's account is not a Jira administrator. Grant admin (jira-admins group), then **create a fresh token** — tokens minted before the grant keep the old permissions. |
+| Automation tools `AUTH_REQUIRED` | Automation uses the per-user API token, not OAuth — run `gojira.bindApiToken` (§9). |
 | Redis restart lost tokens | Ensure `appendonly yes` + `maxmemory-policy noeviction` (the shipped compose sets both). |
