@@ -1410,7 +1410,7 @@ Dry-run validation for a create-workflow payload (no changes). Body shape matche
 Get a single Confluence space.
 
 - **Group:** `read_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** no
 - **Requires cloudId:** yes
 - **Input:**
@@ -1421,7 +1421,7 @@ Get a single Confluence space.
 Get the read/update restrictions on a piece of content.
 
 - **Group:** `read_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** no
 - **Requires cloudId:** yes
 - **Input:**
@@ -1432,7 +1432,7 @@ Get the read/update restrictions on a piece of content.
 List Confluence blueprints (built-in page templates).
 
 - **Group:** `read_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** no
 - **Requires cloudId:** yes
 - **Input:**
@@ -1443,7 +1443,7 @@ List Confluence blueprints (built-in page templates).
 List Confluence spaces.
 
 - **Group:** `read_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** no
 - **Requires cloudId:** yes
 - **Input:**
@@ -1457,7 +1457,7 @@ List Confluence spaces.
 List permissions on a Confluence space.
 
 - **Group:** `read_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** no
 - **Requires cloudId:** yes
 - **Input:**
@@ -1468,7 +1468,7 @@ List permissions on a Confluence space.
 List Confluence templates available globally or in a specific space.
 
 - **Group:** `read_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** no
 - **Requires cloudId:** yes
 - **Input:**
@@ -1485,7 +1485,7 @@ List Confluence templates available globally or in a specific space.
 Create a Confluence space.
 
 - **Group:** `write_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** yes (commit-positive consent enforced)
 - **Requires cloudId:** yes
 - **Input:**
@@ -1499,7 +1499,7 @@ Create a Confluence space.
 Delete a Confluence space. **Irreversible.**
 
 - **Group:** `write_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** yes (commit-positive consent enforced)
 - **Requires cloudId:** yes
 - **Input:**
@@ -1508,10 +1508,10 @@ Delete a Confluence space. **Irreversible.**
 
 ### `confluence.setContentRestrictions`
 
-Replace restrictions on a piece of content.
+Replace restrictions on a piece of content. Requires a paid Confluence plan — the Free plan 403s restriction writes (reads work).
 
 - **Group:** `write_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** yes (commit-positive consent enforced)
 - **Requires cloudId:** yes
 - **Input:**
@@ -1524,7 +1524,7 @@ Replace restrictions on a piece of content.
 Update a Confluence space (name, description, homepage).
 
 - **Group:** `write_confluence_admin`
-- **Auth method:** oauth
+- **Auth method:** api_token
 - **Destructive:** yes (commit-positive consent enforced)
 - **Requires cloudId:** yes
 - **Input:**

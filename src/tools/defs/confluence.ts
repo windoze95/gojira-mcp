@@ -6,17 +6,19 @@ import { reverters } from "../../operations/revert.js";
 
 /**
  * Confluence admin tools (spaces, permissions, templates, blueprints,
- * content restrictions). OAuth via confluenceBase.
+ * content restrictions), via the **site host + per-user API token (Basic)** —
+ * ctx.client.apiTokenJira(), paths under /wiki.
  *
- * Scope note: Confluence is mid-migration between v1 and v2.
- *   - v2 space READS (/wiki/api/v2/spaces*) require GRANULAR scopes
- *     (read:space:confluence, read:space.permission:confluence). Classic
- *     scopes return 401 on v2 — verified against the dev tenant.
- *   - v1 space WRITES (POST/PUT/DELETE /wiki/rest/api/space) still exist and
- *     use classic write:confluence-space. Only the v1 space GET was removed
- *     (410 Gone), so before-snapshots must come from v2.
- * A working deployment therefore needs BOTH classic write scopes AND the
- * granular read:space scopes. See docs/oauth/scope-grammar.md.
+ * Why not OAuth (verified live against the dev tenant): on the OAuth host
+ * (api.atlassian.com/ex/confluence/{cloudId}) the v2 space reads 401 unless the
+ * app declares GRANULAR scopes, and the v1 space API — which the space
+ * create/update/delete and template/restriction tools depend on — returns
+ * **410 Gone** outright. The site host accepts the bound API token via Basic
+ * auth for BOTH v1 and v2 (200s), with no OAuth scopes involved, so this is
+ * the only credential that can run the full surface.
+ *
+ * v1/v2 nuance that still applies: the v1 space GET is deprecated, so
+ * before-snapshots come from v2 (`spaceBeforeSnapshot`).
  */
 const V2 = "/wiki/api/v2";
 const V1 = "/wiki/rest/api";
@@ -27,7 +29,7 @@ async function spaceBeforeSnapshot(
   spaceKey: string,
 ): Promise<unknown> {
   const resp = await ctx.client
-    .confluence()
+    .apiTokenJira()
     .get<{ results?: unknown[] }>(`${V2}/spaces?keys=${encodeURIComponent(spaceKey)}`);
   return resp.data.results?.[0] ?? null;
 }
@@ -37,7 +39,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.listConfluenceSpaces",
     description: "List Confluence spaces.",
     group: "read_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: {
       cursor: z.string().optional(),
@@ -50,7 +52,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
       if (input.cursor) p.set("cursor", input.cursor);
       if (input.type) p.set("type", input.type);
       if (input.status) p.set("status", input.status);
-      const resp = await ctx.client.confluence().get<unknown>(`${V2}/spaces?${p.toString()}`);
+      const resp = await ctx.client.apiTokenJira().get<unknown>(`${V2}/spaces?${p.toString()}`);
       return resp.data;
     },
   }),
@@ -58,11 +60,11 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.getConfluenceSpace",
     description: "Get a single Confluence space.",
     group: "read_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: { spaceId: z.string().min(1) },
     handler: async (input, ctx) => {
-      const resp = await ctx.client.confluence().get<unknown>(`${V2}/spaces/${encodeURIComponent(input.spaceId)}`);
+      const resp = await ctx.client.apiTokenJira().get<unknown>(`${V2}/spaces/${encodeURIComponent(input.spaceId)}`);
       return resp.data;
     },
   }),
@@ -70,7 +72,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.createConfluenceSpace",
     description: "Create a Confluence space.",
     group: "write_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -103,7 +105,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
         revertHint: "DELETE the created space (Confluence v1: rest/api/space/{key}).",
         deriveTargetId: (after) => (after as { id?: string | number })?.id?.toString(),
         run: async () => {
-          const resp = await ctx.client.confluence().post<{ id: string }>(`${V1}/space`, body);
+          const resp = await ctx.client.apiTokenJira().post<{ id: string }>(`${V1}/space`, body);
           return resp.data;
         },
       });
@@ -114,7 +116,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.updateConfluenceSpace",
     description: "Update a Confluence space (name, description, homepage).",
     group: "write_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -124,7 +126,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
-      const c = ctx.client.confluence();
+      const c = ctx.client.apiTokenJira();
       // v1 GET /space/{key} was removed (410); read current state from v2.
       const before = await spaceBeforeSnapshot(ctx, input.spaceKey);
       const body: Record<string, unknown> = {};
@@ -159,12 +161,12 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.deleteConfluenceSpace",
     description: "Delete a Confluence space. **Irreversible.**",
     group: "write_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
     input: { spaceKey: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
-      const c = ctx.client.confluence();
+      const c = ctx.client.apiTokenJira();
       // v1 GET /space/{key} was removed (410); read current state from v2.
       const before = await spaceBeforeSnapshot(ctx, input.spaceKey);
       if (input.commit !== true) {
@@ -195,11 +197,11 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.listSpacePermissions",
     description: "List permissions on a Confluence space.",
     group: "read_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: { spaceId: z.string().min(1) },
     handler: async (input, ctx) => {
-      const resp = await ctx.client.confluence().get<unknown>(`${V2}/spaces/${encodeURIComponent(input.spaceId)}/permissions`);
+      const resp = await ctx.client.apiTokenJira().get<unknown>(`${V2}/spaces/${encodeURIComponent(input.spaceId)}/permissions`);
       return resp.data;
     },
   }),
@@ -207,7 +209,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.listTemplates",
     description: "List Confluence templates available globally or in a specific space.",
     group: "read_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: { spaceKey: z.string().optional(), startAt: z.number().int().nonnegative().default(0).optional(), maxResults: z.number().int().positive().max(100).default(25).optional() },
     handler: async (input, ctx) => {
@@ -216,7 +218,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
         limit: String(input.maxResults ?? 25),
       });
       if (input.spaceKey) p.set("spaceKey", input.spaceKey);
-      const resp = await ctx.client.confluence().get<unknown>(`${V1}/template/page?${p.toString()}`);
+      const resp = await ctx.client.apiTokenJira().get<unknown>(`${V1}/template/page?${p.toString()}`);
       return resp.data;
     },
   }),
@@ -224,13 +226,13 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.listBlueprints",
     description: "List Confluence blueprints (built-in page templates).",
     group: "read_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: { spaceKey: z.string().optional() },
     handler: async (input, ctx) => {
       const p = new URLSearchParams();
       if (input.spaceKey) p.set("spaceKey", input.spaceKey);
-      const resp = await ctx.client.confluence().get<unknown>(`${V1}/template/blueprint${p.toString() ? `?${p.toString()}` : ""}`);
+      const resp = await ctx.client.apiTokenJira().get<unknown>(`${V1}/template/blueprint${p.toString() ? `?${p.toString()}` : ""}`);
       return resp.data;
     },
   }),
@@ -238,19 +240,20 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
     name: "confluence.getContentRestrictions",
     description: "Get the read/update restrictions on a piece of content.",
     group: "read_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: { contentId: z.string().min(1) },
     handler: async (input, ctx) => {
-      const resp = await ctx.client.confluence().get<unknown>(`${V1}/content/${encodeURIComponent(input.contentId)}/restriction`);
+      const resp = await ctx.client.apiTokenJira().get<unknown>(`${V1}/content/${encodeURIComponent(input.contentId)}/restriction`);
       return resp.data;
     },
   }),
   defineTool({
     name: "confluence.setContentRestrictions",
-    description: "Replace restrictions on a piece of content.",
+    description:
+      "Replace restrictions on a piece of content. Requires a paid Confluence plan — the Free plan 403s restriction writes (reads work).",
     group: "write_confluence_admin",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
     input: {
@@ -259,7 +262,7 @@ export const confluenceAdminTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
-      const c = ctx.client.confluence();
+      const c = ctx.client.apiTokenJira();
       const before = await c.get<unknown>(`${V1}/content/${encodeURIComponent(input.contentId)}/restriction`);
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "confluence.setContentRestrictions",
@@ -293,6 +296,6 @@ reverters.register("confluence.createConfluenceSpace", async (entry, anyCtx) => 
   const ctx = anyCtx as import("../types.js").ToolContext;
   const key = (entry.target as { key?: string }).key;
   if (!key) throw new Error("Cannot revert: space key missing.");
-  await ctx.client.confluence().delete<unknown>(`/wiki/rest/api/space/${encodeURIComponent(key)}`);
+  await ctx.client.apiTokenJira().delete<unknown>(`/wiki/rest/api/space/${encodeURIComponent(key)}`);
   return { deleted: key };
 });

@@ -49,7 +49,7 @@ some scopes live under the **Granular scopes** tab.
 | `read_projects` `write_projects` `delete_projects` `read_schemes` `write_schemes` `read_customfields` `write_customfields` `read_filters_dashboards` `write_filters_dashboards` `read_agile` `write_agile` | Jira (classic) | `read:jira-work` `write:jira-work` `manage:jira-project` `manage:jira-configuration` |
 | `read_workflows` `write_workflows` | Jira (classic) | `manage:jira-configuration` (workflow reads/writes + scheme publish) |
 | `read_jsm_admin` `write_jsm_admin` | Jira Service Management (classic) | `read:servicedesk-request` `write:servicedesk-request` `manage:servicedesk-customer` |
-| `read_confluence_admin` `write_confluence_admin` | Confluence | **classic:** `read:confluence-space.summary` `write:confluence-space` `read:confluence-content.all` `write:confluence-content` · **granular (required for v2 space reads):** `read:space:confluence` `read:space.permission:confluence` |
+| `read_confluence_admin` `write_confluence_admin` | — (uses the bound per-user API token, not OAuth) | **No OAuth scopes needed.** Confluence admin tools authenticate with the bound API token via the site host (Basic). Verified live: the OAuth host 401s v2 reads without granular scopes and returns **410 Gone** for the v1 space API these tools need, so the token path is the only complete one. Note: `setContentRestrictions` requires a paid Confluence plan (403 on Free). |
 | `read_assets` `write_assets` | Jira → **Granular scopes** (CMDB) | `read:cmdb-object:jira` `write:cmdb-object:jira` `read:cmdb-schema:jira` `write:cmdb-schema:jira` `read:cmdb-type:jira` `write:cmdb-type:jira` `read:cmdb-attribute:jira` `write:cmdb-attribute:jira` |
 | `read_automation` `write_automation` | — (uses the bound per-user API token, not OAuth) | **No OAuth scope needed or available.** Automation tools authenticate with the API token bound via `gojira.bindApiToken` (Basic auth). Requirement: the token's account must be a **Jira administrator**, or every call 403s. |
 | `admin_org` | — (uses a separate org-admin API key, not OAuth) | See §8. |
@@ -73,7 +73,7 @@ no org admin, no automation):
 ATLASSIAN_OAUTH_CLIENT_ID=...
 ATLASSIAN_OAUTH_CLIENT_SECRET=...
 # Include EVERY scope the enabled groups need (must match §3, incl. granular):
-ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:confluence-space.summary write:confluence-space read:confluence-content.all write:confluence-content read:space:confluence read:space.permission:confluence read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
+ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:jira-work manage:jira-project manage:jira-configuration read:servicedesk-request write:servicedesk-request manage:servicedesk-customer read:cmdb-object:jira write:cmdb-object:jira read:cmdb-schema:jira write:cmdb-schema:jira read:cmdb-type:jira write:cmdb-type:jira read:cmdb-attribute:jira write:cmdb-attribute:jira
 ATLASSIAN_PINNED_CLOUD_ID=<this instance's cloudId>   # strongly recommended
 TOKEN_ENCRYPTION_KEY=<from step 4>
 MCP_SERVER_URL=https://<your-host>
@@ -121,9 +121,10 @@ listing tools. Each upstream call is attributable to the consenting user.
 
 ## 9. Bind the API token (per user, one-time)
 
-The `read_jsm_admin` / `write_jsm_admin` **and** `read_automation` /
-`write_automation` tools authenticate with a per-user Atlassian **API token**
-side-channel (not OAuth). Each user runs this once:
+The `read_jsm_admin` / `write_jsm_admin`, `read_automation` /
+`write_automation`, **and** `read_confluence_admin` / `write_confluence_admin`
+tools authenticate with a per-user Atlassian **API token** side-channel (not
+OAuth). Each user runs this once:
 
 1. Create a token at <https://id.atlassian.com/manage-profile/security/api-tokens>
    ("Create API token"). Copy it. *(This page requires an emailed one-time

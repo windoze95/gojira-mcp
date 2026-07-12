@@ -67,8 +67,8 @@ scope_has() { [[ " $scp " == *" $1 "* ]]; }
 check_scope() { # check_scope GROUP SCOPE
   if has "$1" && ! scope_has "$2"; then ylw "⚠ group '$1' is enabled but scope '$2' is not in ATLASSIAN_OAUTH_SCOPES"; warn=1; fi
 }
-check_scope read_confluence_admin  "read:space:confluence"   # v2 space reads need granular scope
-check_scope write_confluence_admin "write:confluence-space"
+# Confluence admin tools ride the per-user API token (site host, Basic) — no
+# OAuth scopes needed; nothing to check here.
 check_scope read_assets            "read:cmdb-object:jira"    # Assets needs CMDB granular scopes
 check_scope write_assets           "write:cmdb-object:jira"
 check_scope read_jsm_admin         "read:servicedesk-request"

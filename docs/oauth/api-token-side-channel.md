@@ -17,6 +17,10 @@ time of writing:
   token's account must also be a **Jira administrator** — non-admin
   tokens get 403 on every call, and a token created before the admin
   grant keeps stale permissions (create the token after the grant)
+- **Confluence admin** (spaces, templates, restrictions) → API-token via
+  the site host (`https://<site>/wiki/...`). OAuth cannot run these tools:
+  v2 space reads 401 without per-app granular scopes, and the v1 space
+  API they depend on returns **410 Gone** on the OAuth host (verified live)
 - **Assets/Insight API** (`api.atlassian.com/jsm/assets/workspace/...`)
   → accepts OAuth bearer for some routes, API-token for others;
   workspace discovery requires OAuth
@@ -91,9 +95,9 @@ right `AtlassianClient` for the tool. The factories returned on `ctx.client`:
 | Factory | Auth | Base URL |
 |---|---|---|
 | `ctx.client.jira()` | OAuth bearer | `api.atlassian.com/ex/jira/<cloudId>` |
-| `ctx.client.confluence()` | OAuth bearer | `api.atlassian.com/ex/confluence/<cloudId>` |
-| `ctx.client.apiTokenJira()` | API token Basic | `https://<site_url>` |
+| `ctx.client.apiTokenJira()` | API token Basic | `https://<site_url>` (Jira REST + Confluence under `/wiki`) |
 | `ctx.client.automation()` | API token Basic (Jira-admin account required) | `api.atlassian.com/automation/public/jira/<cloudId>/rest/v1` |
+| `ctx.client.forms()` | API token Basic | `api.atlassian.com/jira/forms/cloud/<cloudId>` |
 | `ctx.client.assets(wsId)` | OAuth bearer | `api.atlassian.com/jsm/assets/workspace/<wsId>/v1` |
 | `ctx.client.admin()` | Org admin bearer | `api.atlassian.com/admin/v1` |
 
