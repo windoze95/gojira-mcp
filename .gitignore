@@ -9,3 +9,6 @@ coverage/
 .DS_Store
 .vitest/
 .tsbuildinfo
+
+# Redis dump artifacts from local runs
+*.rdb
