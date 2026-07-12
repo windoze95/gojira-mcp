@@ -5,54 +5,65 @@ import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryR
 import { reverters } from "../../operations/revert.js";
 
 /**
- * Jira Cloud Automation rules, via the Automation public REST API:
- *   api.atlassian.com/automation/public/jira/{cloudId}/rest/v1/rule...
- * (ctx.client.automation()). The previous code used /rest/cb-automation, which
- * is a Jira Data Center internal path that does not exist on Cloud.
+ * Jira Cloud Automation rules ("business rules"), via the GA Automation Rule
+ * Management REST API:
+ *   https://api.atlassian.com/automation/public/jira/{cloudId}/rest/v1/...
+ * (ctx.client.automation()). The old code targeted /rest/cb-automation, a Jira
+ * Data Center internal path absent on Cloud.
  *
- * IMPORTANT — scope caveat: the Automation public API requires the automation
- * OAuth scope, which is NOT offered to standard 3LO OAuth apps (there is no
- * Automation entry in the developer-console scope list, and a classic-scope
- * token gets 401 "scope does not match"). It generally requires a Connect/Forge
- * app credential. These endpoints could NOT be live-verified here; if your
- * deployment's credential cannot reach the automation API, DISABLE this group by
- * removing read_automation/write_automation from GOJIRA_ENABLED_GROUPS.
+ * AUTH (verified): this API authenticates with an **API token used as a Bearer**
+ * — NOT OAuth 3LO (no automation OAuth scope exists; a 3LO token gets
+ * `401 scope does not match`), and NOT Basic auth (the api.atlassian gateway
+ * rejects it). These tools therefore use the bound per-user API token
+ * (`gojira.bindApiToken`) as the bearer. Two requirements:
+ *   1. The token's account must be a **Jira administrator** (member of the
+ *      jira-admins group) — otherwise every call returns 403.
+ *   2. Create the token AFTER granting admin; a scoped token created earlier can
+ *      carry a stale permission snapshot.
+ * Endpoints below are the real ones from the Automation OpenAPI spec (rule
+ * listing is `/rule/summary`, enable/disable is `PUT /rule/{uuid}/state`).
  */
 const BASE = "";
 
 export const automationTools = (): AnyToolDef[] => [
   defineTool({
     name: "automation.listAutomationRules",
-    description: "List Jira automation rules. Either project-scoped (projectKey) or global.",
+    description: "List automation rules (summaries) for this site.",
     group: "read_automation",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     input: {
-      projectKey: z.string().optional(),
-      query: z.string().optional(),
-      startAt: z.number().int().nonnegative().default(0).optional(),
-      maxResults: z.number().int().positive().max(100).default(50).optional(),
+      cursor: z.string().optional(),
+      limit: z.number().int().positive().max(100).default(50).optional(),
     },
     handler: async (input, ctx) => {
-      const p = new URLSearchParams();
-      p.set("startAt", String(input.startAt ?? 0));
-      p.set("maxResults", String(input.maxResults ?? 50));
-      if (input.query) p.set("query", input.query);
-      if (input.projectKey) p.set("projectId", input.projectKey);
-      const resp = await ctx.client.automation().get<unknown>(`${BASE}/rule?${p.toString()}`);
+      const p = new URLSearchParams({ limit: String(input.limit ?? 50) });
+      if (input.cursor) p.set("cursor", input.cursor);
+      const resp = await ctx.client.automation().get<unknown>(`${BASE}/rule/summary?${p.toString()}`);
       return resp.data;
     },
   }),
-
   defineTool({
     name: "automation.getAutomationRule",
-    description: "Retrieve a single automation rule by id.",
+    description: "Retrieve a single automation rule by its UUID.",
     group: "read_automation",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
-    input: { ruleId: z.string().min(1) },
+    input: { ruleId: z.string().min(1).describe("The rule UUID.") },
     handler: async (input, ctx) => {
       const resp = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
+      return resp.data;
+    },
+  }),
+  defineTool({
+    name: "automation.searchManualRules",
+    description: "Find manually-triggerable automation rules available for a given object (e.g. an issue).",
+    group: "read_automation",
+    authMethod: "api_token",
+    needsCloudId: true,
+    input: { payload: z.record(z.string(), z.unknown()).describe("The rule/manual/search request body.") },
+    handler: async (input, ctx) => {
+      const resp = await ctx.client.automation().post<unknown>(`${BASE}/rule/manual/search`, input.payload);
       return resp.data;
     },
   }),
@@ -60,22 +71,23 @@ export const automationTools = (): AnyToolDef[] => [
   defineTool({
     name: "automation.createAutomationRule",
     description:
-      "Create a new automation rule. Provide the rule body as Atlassian's JSON shape. Destructive — requires `commit:true`.",
+      "Create an automation rule. `rule` is the rule object (components: trigger, conditions, actions) — the API " +
+      "wraps it as { rule: <rule> }. Destructive — requires `commit:true`.",
     group: "write_automation",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
     input: {
-      projectKey: z.string().optional(),
       rule: z.record(z.string(), z.unknown()),
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
+      const body = { rule: input.rule };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "automation.createAutomationRule",
         target: { kind: "automation_rule", name: (input.rule as { name?: string }).name ?? "(unnamed)" },
         before: null,
-        after: input.rule,
+        after: body,
       });
       if (dry) return dry;
       const entry = await ctx.journalOp({
@@ -84,38 +96,38 @@ export const automationTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "automation_rule", name: (input.rule as { name?: string }).name ?? "(unnamed)" },
         before: null,
-        request: { projectKey: input.projectKey, rule: input.rule } as Record<string, unknown>,
+        request: { rule: (input.rule as { name?: string }).name } as Record<string, unknown>,
         revertible: true,
-        revertHint: "DELETE the rule by id.",
-        deriveTargetId: (after) => (after as { id?: string })?.id,
+        revertHint: "DELETE the rule by its UUID.",
+        deriveTargetId: (after) => (after as { id?: string; ruleUuid?: string })?.id ?? (after as { ruleUuid?: string })?.ruleUuid,
         run: async () => {
-          const resp = await ctx.client.automation().post<{ id: string }>(`${BASE}/rule`, input.rule);
+          const resp = await ctx.client.automation().post<{ id?: string }>(`${BASE}/rule`, body);
           return resp.data;
         },
       });
       return { ok: true, journal_id: entry.opId, rule: entry.after };
     },
   }),
-
   defineTool({
     name: "automation.updateAutomationRule",
-    description: "Replace a rule body in place. Captures full-before/full-after diff.",
+    description: "Replace a rule in place by UUID. Captures full before/after (rule JSON does not patch cleanly).",
     group: "write_automation",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
     input: {
-      ruleId: z.string().min(1),
+      ruleId: z.string().min(1).describe("The rule UUID."),
       rule: z.record(z.string(), z.unknown()),
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
       const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
+      const body = { rule: input.rule };
       const dry = buildDryRunIfNotCommitted(input, {
         tool: "automation.updateAutomationRule",
         target: { kind: "automation_rule", id: input.ruleId },
         before: before.data,
-        after: input.rule,
+        after: body,
       });
       if (dry) return dry;
       const entry = await ctx.journalOp({
@@ -124,26 +136,25 @@ export const automationTools = (): AnyToolDef[] => [
         cloudId: ctx.cloudId,
         target: { kind: "automation_rule", id: input.ruleId },
         before: before.data,
-        request: { ruleId: input.ruleId, rule: input.rule } as Record<string, unknown>,
+        request: { ruleId: input.ruleId } as Record<string, unknown>,
         revertible: true,
-        revertHint: "PUT the captured `before` payload back to the same rule id.",
+        revertHint: "PUT the captured `before` rule back to the same UUID.",
         run: async () => {
-          const resp = await ctx.client.automation().put<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`, input.rule);
+          const resp = await ctx.client.automation().put<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`, body);
           return resp.data;
         },
       });
       return { ok: true, journal_id: entry.opId };
     },
   }),
-
   defineTool({
     name: "automation.deleteAutomationRule",
-    description: "Delete an automation rule. **Irreversible.**",
+    description: "Delete an automation rule by UUID. **Irreversible.**",
     group: "write_automation",
-    authMethod: "oauth",
+    authMethod: "api_token",
     needsCloudId: true,
     destructive: true,
-    input: { ruleId: z.string().min(1), commit: z.boolean().optional() },
+    input: { ruleId: z.string().min(1).describe("The rule UUID."), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
       const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
       if (input.commit !== true) {
@@ -169,137 +180,66 @@ export const automationTools = (): AnyToolDef[] => [
       return { ok: true, journal_id: entry.opId };
     },
   }),
-
-  defineTool({
-    name: "automation.enableAutomationRule",
-    description: "Enable a rule. Revertible (disable).",
-    group: "write_automation",
-    authMethod: "oauth",
-    needsCloudId: true,
-    destructive: true,
-    input: { ruleId: z.string().min(1), commit: z.boolean().optional() },
-    handler: async (input, ctx) => {
-      const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
-      const dry = buildDryRunIfNotCommitted(input, {
-        tool: "automation.enableAutomationRule",
-        target: { kind: "automation_rule", id: input.ruleId },
-        before: before.data,
-        after: { ...(before.data as object), state: "ENABLED" },
-      });
-      if (dry) return dry;
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "automation.enableAutomationRule",
-        cloudId: ctx.cloudId,
-        target: { kind: "automation_rule", id: input.ruleId },
-        before: before.data,
-        request: { ruleId: input.ruleId } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call disableAutomationRule on the same id.",
-        run: async () => {
-          const resp = await ctx.client.automation().post<unknown>(
-            `${BASE}/rule/${encodeURIComponent(input.ruleId)}/enable`,
-          );
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
-
-  defineTool({
-    name: "automation.disableAutomationRule",
-    description: "Disable a rule. Revertible (enable).",
-    group: "write_automation",
-    authMethod: "oauth",
-    needsCloudId: true,
-    destructive: true,
-    input: { ruleId: z.string().min(1), commit: z.boolean().optional() },
-    handler: async (input, ctx) => {
-      const before = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);
-      const dry = buildDryRunIfNotCommitted(input, {
-        tool: "automation.disableAutomationRule",
-        target: { kind: "automation_rule", id: input.ruleId },
-        before: before.data,
-        after: { ...(before.data as object), state: "DISABLED" },
-      });
-      if (dry) return dry;
-      const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "automation.disableAutomationRule",
-        cloudId: ctx.cloudId,
-        target: { kind: "automation_rule", id: input.ruleId },
-        before: before.data,
-        request: { ruleId: input.ruleId } as Record<string, unknown>,
-        revertible: true,
-        revertHint: "Call enableAutomationRule on the same id.",
-        run: async () => {
-          const resp = await ctx.client.automation().post<unknown>(
-            `${BASE}/rule/${encodeURIComponent(input.ruleId)}/disable`,
-          );
-          return resp.data;
-        },
-      });
-      return { ok: true, journal_id: entry.opId };
-    },
-  }),
-
-  defineTool({
-    name: "automation.getAutomationRuleAuditLog",
-    description: "Returns recent audit-log entries for a single automation rule.",
-    group: "read_automation",
-    authMethod: "oauth",
-    needsCloudId: true,
-    input: {
-      ruleId: z.string().min(1),
-      startAt: z.number().int().nonnegative().default(0).optional(),
-      maxResults: z.number().int().positive().max(100).default(50).optional(),
-    },
-    handler: async (input, ctx) => {
-      const p = new URLSearchParams({
-        startAt: String(input.startAt ?? 0),
-        maxResults: String(input.maxResults ?? 50),
-      });
-      const resp = await ctx.client.automation().get<unknown>(
-        `${BASE}/rule/${encodeURIComponent(input.ruleId)}/audit-log?${p.toString()}`,
-      );
-      return resp.data;
-    },
-  }),
-
-  defineTool({
-    name: "automation.getAutomationUsage",
-    description: "Returns automation usage statistics for this site (executions, queue depth).",
-    group: "read_automation",
-    authMethod: "oauth",
-    needsCloudId: true,
-    handler: async (_input, ctx) => {
-      const resp = await ctx.client.automation().get<unknown>(`${BASE}/usage`);
-      return resp.data;
-    },
+  // Enable/disable is a state change: PUT /rule/{uuid}/state { state: ENABLED|DISABLED }.
+  ...(["ENABLED", "DISABLED"] as const).map((target) => {
+    const verb = target === "ENABLED" ? "enable" : "disable";
+    const inverse = target === "ENABLED" ? "disable" : "enable";
+    return defineTool({
+      name: `automation.${verb}AutomationRule`,
+      description: `${verb[0].toUpperCase() + verb.slice(1)} an automation rule by UUID. Revertible (${inverse}).`,
+      group: "write_automation",
+      authMethod: "api_token",
+      needsCloudId: true,
+      destructive: true,
+      input: { ruleId: z.string().min(1).describe("The rule UUID."), commit: z.boolean().optional() },
+      handler: async (input, ctx) => {
+        const body = { state: target };
+        const dry = buildDryRunIfNotCommitted(input, {
+          tool: `automation.${verb}AutomationRule`,
+          target: { kind: "automation_rule", id: input.ruleId },
+          before: null,
+          after: body,
+        });
+        if (dry) return dry;
+        const entry = await ctx.journalOp({
+          accountId: ctx.accountId,
+          tool: `automation.${verb}AutomationRule`,
+          cloudId: ctx.cloudId,
+          target: { kind: "automation_rule", id: input.ruleId },
+          before: null,
+          request: { ruleId: input.ruleId, state: target } as Record<string, unknown>,
+          revertible: true,
+          revertHint: `Call automation.${inverse}AutomationRule on the same UUID.`,
+          run: async () => {
+            const resp = await ctx.client
+              .automation()
+              .put<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}/state`, body);
+            return resp.data;
+          },
+        });
+        return { ok: true, journal_id: entry.opId };
+      },
+    });
   }),
 ];
 
 reverters.register("automation.createAutomationRule", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
   const id = (entry.target as { id?: string }).id;
-  if (!id) throw new Error("Cannot revert: created rule id missing.");
-  await ctx.client.automation().delete<unknown>(`${BASE}/rule/${encodeURIComponent(id)}`);
+  if (!id) throw new Error("Cannot revert: created rule UUID missing.");
+  await ctx.client.automation().delete<unknown>(`/rule/${encodeURIComponent(id)}`);
   return { deleted: id };
 });
 
-reverters.register("automation.disableAutomationRule", async (entry, anyCtx) => {
-  const ctx = anyCtx as import("../types.js").ToolContext;
-  const id = (entry.target as { id?: string }).id;
-  if (!id) throw new Error("Cannot revert: rule id missing.");
-  const resp = await ctx.client.automation().post<unknown>(`${BASE}/rule/${encodeURIComponent(id)}/enable`);
-  return { enabled: id, response: resp.data };
-});
-
-reverters.register("automation.enableAutomationRule", async (entry, anyCtx) => {
-  const ctx = anyCtx as import("../types.js").ToolContext;
-  const id = (entry.target as { id?: string }).id;
-  if (!id) throw new Error("Cannot revert: rule id missing.");
-  const resp = await ctx.client.automation().post<unknown>(`${BASE}/rule/${encodeURIComponent(id)}/disable`);
-  return { disabled: id, response: resp.data };
-});
+for (const [name, state] of [
+  ["automation.enableAutomationRule", "DISABLED"],
+  ["automation.disableAutomationRule", "ENABLED"],
+] as const) {
+  reverters.register(name, async (entry, anyCtx) => {
+    const ctx = anyCtx as import("../types.js").ToolContext;
+    const id = (entry.target as { id?: string }).id;
+    if (!id) throw new Error("Cannot revert: rule UUID missing.");
+    const resp = await ctx.client.automation().put<unknown>(`/rule/${encodeURIComponent(id)}/state`, { state });
+    return { reverted: id, state, response: resp.data };
+  });
+}
