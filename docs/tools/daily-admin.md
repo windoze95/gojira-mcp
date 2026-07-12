@@ -5,7 +5,7 @@ Assets/Insight CMDB, Jira automation rules, custom fields, and the safe
 project-management surface (create + archive; delete is in its own group
 covered in [schemes-and-workflows.md](schemes-and-workflows.md)).
 
-Roughly 60 tools across 10 permission groups. The auto-generated
+Roughly 69 tools across 10 permission groups. The auto-generated
 [catalog](catalog.md) lists every tool with its full input schema.
 
 ## JSM admin (`read_jsm_admin` / `write_jsm_admin`)
@@ -39,10 +39,25 @@ called first per user).
 - `jsm.removeCustomersFromOrganization(organizationId, accountIds)` — destructive.
 - `jsm.searchKnowledgeBaseArticles(serviceDeskId, query)`.
 
-> Earlier versions also shipped queue/SLA/portal/forms *write* tools — those
-> called endpoints that don't exist in Atlassian Cloud and were removed. What
-> remains is the live-verified surface; portal branding, SLA config, and the
-> email channel are UI-only (capability map).
+> Earlier versions also shipped queue/SLA/portal *write* tools — those called
+> endpoints that don't exist in Atlassian Cloud and were removed. What remains
+> is the live-verified surface; portal branding, SLA config, and the email
+> channel are UI-only (capability map).
+
+## Forms (`read_jsm_admin` / `write_jsm_admin`)
+
+**Credential:** the same bound API token — the Forms API's Basic-auth host
+(`api.atlassian.com/jira/forms/cloud/{cloudId}`) needs no OAuth scope.
+Full template lifecycle verified live.
+
+- `forms.listFormTemplates(projectIdOrKey)` — portal request forms / intake forms.
+- `forms.getFormTemplate(projectIdOrKey, formId)` — includes the full `design` document (export/adapt).
+- `forms.getRequestTypeForm(serviceDeskId, requestTypeId)`.
+- `forms.listIssueForms(issueIdOrKey)` / `forms.getIssueFormAnswers(issueIdOrKey, formId)`.
+- `forms.createFormTemplate(projectIdOrKey, form)` — destructive, revertible.
+- `forms.updateFormTemplate(projectIdOrKey, formId, form)` — destructive, revertible; attach to portal
+  request types via `portalRequestTypeIds`.
+- `forms.deleteFormTemplate(projectIdOrKey, formId)` — destructive, **irreversible** (design captured in journal).
 
 ## Assets / Insight (`read_assets` / `write_assets`)
 

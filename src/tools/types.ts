@@ -79,6 +79,8 @@ export interface AtlassianClientFactories {
   assets(workspaceId: string): AtlassianClient;
   /** Jira Cloud Automation public API (api.atlassian.com/automation/public/jira/{cloudId}/rest/v1). */
   automation(): AtlassianClient;
+  /** Jira Forms (ProForma) API, Basic-auth host (api.atlassian.com/jira/forms/cloud/{cloudId}). */
+  forms(): AtlassianClient;
 }
 
 export interface ToolDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O = unknown> {

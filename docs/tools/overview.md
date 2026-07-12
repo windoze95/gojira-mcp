@@ -1,6 +1,6 @@
 # Tools overview
 
-gojira-mcp exposes **145 tools** spread across **22 permission groups**
+gojira-mcp exposes **153 tools** spread across **22 permission groups**
 (plus an always-available `utility` group). Each tool is defined
 declaratively via `defineTool` in `src/tools/defs/*.ts`.
 
@@ -8,7 +8,7 @@ declaratively via `defineTool` in `src/tools/defs/*.ts`.
 
 | Doc | Theme | Tool count | Tool names start with |
 |---|---|---|---|
-| [Daily admin](daily-admin.md) | JSM, Assets, Automation, Custom fields, Projects (read/create/archive) | ~61 | `jsm.`, `assets.`, `automation.`, `customfields.`, `projects.` |
+| [Daily admin](daily-admin.md) | JSM, Assets, Automation, Custom fields, Projects (read/create/archive) | ~69 | `jsm.`, `forms.`, `assets.`, `automation.`, `customfields.`, `projects.` |
 | [Schemes and workflows](schemes-and-workflows.md) | Schemes, workflow CRUD + publish, Confluence admin, project deletion | ~42 | `schemes.`, `workflows.`, `confluence.`, `projects.deleteJiraProject` |
 | [Agile and views](agile-and-views.md) | Boards, sprints, epics, filters, dashboards | ~18 | `agile.`, `filters.`, `dashboards.` |
 | [Org admin](org-admin.md) | `admin.atlassian.com` (gated separately) | 17 | `orgAdmin.` |
@@ -107,12 +107,12 @@ See [adding-a-tool.md](../development/adding-a-tool.md) for the recipe:
 
 ## Practical surface size
 
-The complete tool set (145) is too large for any single frontier model
+The complete tool set (153) is too large for any single frontier model
 to dispatch with maximum accuracy. To keep model behaviour sharp:
 
 - **Tighten the allowlist:** set `GOJIRA_ENABLED_GROUPS` to exactly the
   groups this deployment needs. For a read-only audit deployment, list
-  only `utility` + the `read_*` groups — model only sees ~76 tools.
+  only `utility` + the `read_*` groups — model only sees ~81 tools.
 - **One deployment per use-case:** rather than running one big instance
   with everything enabled, run a JSM-only instance, a workflow-admin
   instance, etc. Smaller surface = sharper tool selection.

@@ -24,7 +24,7 @@ Connect/Forge app credential · **UI** = no public API at any auth level.
 | Workflow transition rules (conditions/validators/post‑functions) | REST‑OAuth | new workflow API; wired in the workflow rewrite |
 | Assets / CMDB | REST‑OAuth | needs the `cmdb-*:jira` granular scopes |
 | Confluence spaces/pages | REST‑OAuth | needs granular `space`/`page` scopes |
-| **Portal request forms + IT‑support forms** | REST‑OAuth | JSM **Forms API** (`api.atlassian.com/jira/forms/cloud/{cloudId}`) — endpoint exists (401 = needs the Forms scope). Wireable once the scope is added. |
+| **Portal request forms + IT‑support forms** | **REST‑token** | JSM **Forms API** Basic‑auth host (`api.atlassian.com/jira/forms/cloud/{cloudId}`) works with the admin API token — **no OAuth scope needed**. Full template lifecycle verified live (create 200 → export → update → delete → 404). Shipped as the `forms.*` tools. |
 
 ## ✅ Automation rules — reachable via REST (corrected finding)
 
@@ -78,7 +78,7 @@ genuinely **operator‑in‑the‑loop** tasks, not autonomous ones.
 
 1. **Ship the verified REST core** (everything in the ✅ table) — this is the bulk
    of daily JSM admin and it works today.
-2. **Wire the Forms tools** (add the Forms scope; the API is there).
+2. ~~Wire the Forms tools~~ **Done** — `forms.*` ships on the API-token path (no scope needed).
 3. **Automation rules → the REST tools already in gojira** (`automation.*`). The
    operator binds an API token whose account is a Jira admin. **No Forge app.**
 4. **SLA config / email channel / portal branding → operator‑guided.** gojira can
