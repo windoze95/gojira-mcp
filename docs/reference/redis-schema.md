@@ -12,6 +12,7 @@ TTLs and types are exact; sizes are typical.
 | `mcp_token:<at>` | String (JSON) | 1 hour | none | MCP access token → `{ accountId, clientId, scopes, expiresAt, familyId }`. |
 | `mcp_refresh:<rt>` | String (JSON) | 30 days | none | MCP refresh token → `{ accountId, clientId, scopes, familyId, generation }`. |
 | `rt_family:<rt>` | String | 31 days | none | Per-RT pointer to its family. Outlives the RT for reuse-detection grace. |
+| `rt_family_account:<familyId>` | String (accountId) | 31 days | none | Family → account map. Outlives the RTs so reuse detection can still attribute the incident to a user after the presented RT's blob is gone. |
 | `refresh_family:<familyId>` | Set | 30 days | none | Currently-live RT ids in the family. |
 | `refresh_family_tokens:<familyId>` | Set | 30 days | none | Currently-live AT ids in the family. |
 | `token:<accountId>` | String (base64) | 90 days sliding | **AES-256-GCM** | Upstream Atlassian StoredToken: access_token, refresh_token, expires_at, accountId, name, email, accessible_cloud_ids[], primary_cloud_id. |
@@ -45,8 +46,8 @@ Only a handful of paths use atomic operations beyond simple `SET/GET`:
 - Lua eval for the rate-limiter (`BUCKET_SCRIPT`, `FEEDBACK_SCRIPT`).
 - Lua compare-and-delete for the upstream-refresh lock release.
 - Pipelines for token mint (`mcp_token:*`, `mcp_refresh:*`,
-  `rt_family:*` set together) and for journal write (`op_journal:*` +
-  `op_journal_idx:*`).
+  `rt_family:*`, `rt_family_account:*` set together) and for journal
+  write (`op_journal:*` + `op_journal_idx:*`).
 
 ## Garbage collection
 
@@ -62,33 +63,64 @@ inside the Lua script.
 
 ## Operator queries
 
-Common one-liners (assume `REDIS_PASSWORD` is set):
+### Addressing the Redis container
+
+The compose stack sets no `container_name`, so there is **no container
+called `gojira-redis`** — Docker names it `<project>-redis-1`, and the
+project name varies by how you brought the stack up:
+
+| How you deployed | Container is actually named |
+|---|---|
+| `docker compose up -d` from the repo root | `gojira-mcp-redis-1` (project = directory name) |
+| `docker compose -p gojira-prod ...` (prod profile) | `gojira-prod-redis-1` |
+| `docker compose -p gojira-nonprod ...` (nonprod profile) | `gojira-nonprod-redis-1` |
+
+Address the **service**, not the container, and the name stops
+mattering. Every command below is `docker compose exec redis`, run from
+the repo root. Under a deploy profile, add the same `-p` you deployed
+with:
+
+```bash
+docker compose -p gojira-prod exec -T redis redis-cli -a "$REDIS_PASSWORD" PING
+```
+
+`-T` disables TTY allocation. Keep it on anything you pipe — with a TTY,
+redis-cli terminates lines with `\r\n` and the stray `\r` rides along
+into `xargs`/`jq`.
+
+### One-liners
+
+Assume `REDIS_PASSWORD` is set and you are in the repo root:
 
 ```bash
 # count tokens currently issued
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     --scan --pattern "token:*" | wc -l
 
 # inspect an active session bearer
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     GET "mcp_token:<at>" | jq
 
 # enumerate live RT families (find a user's family then SMEMBERS)
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     SMEMBERS "refresh_family:<familyId>"
 
+# attribute a family back to its user (survives the RT blobs)
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
+    GET "rt_family_account:<familyId>"
+
 # bucket state for a user
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     HGETALL "ratelimit:<accountId>"
 
 # operation journal index for a user
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     ZREVRANGEBYSCORE "op_journal_idx:<accountId>" "+inf" "-inf" LIMIT 0 25
 
 # delete a single op journal entry
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     DEL "op_journal:<accountId>:<opId>"
-docker exec gojira-redis redis-cli -a "$REDIS_PASSWORD" \
+docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
     ZREM "op_journal_idx:<accountId>" "<opId>"
 ```
 

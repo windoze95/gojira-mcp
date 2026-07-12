@@ -32,6 +32,76 @@ const MAX_SESSIONS = 10_000;
 /** Sessions idle longer than this are swept and closed. */
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const SESSION_SWEEP_INTERVAL_MS = 60 * 1000;
+/**
+ * How long shutdown waits for tool handlers already in dispatch to return.
+ * Must stay below index.ts's SHUTDOWN_HARD_TIMEOUT_MS so the drain finishes (or
+ * gives up) before the force-exit backstop fires.
+ */
+const DRAIN_TIMEOUT_MS = 10_000;
+
+/**
+ * Counts tool handlers that have entered dispatch and not yet returned.
+ *
+ * Closing an MCP transport does not wait for a handler that is still running,
+ * so without this the process could exit while a mutation is mid journal/audit
+ * write. Shutdown drains this first, then closes transports.
+ */
+class InFlightTracker {
+  private running = 0;
+  private idleWaiters: Array<() => void> = [];
+
+  get count(): number {
+    return this.running;
+  }
+
+  async track<T>(run: () => Promise<T>): Promise<T> {
+    this.running += 1;
+    try {
+      return await run();
+    } finally {
+      this.running -= 1;
+      if (this.running === 0) {
+        const waiters = this.idleWaiters;
+        this.idleWaiters = [];
+        for (const resolve of waiters) resolve();
+      }
+    }
+  }
+
+  /**
+   * Resolves once nothing is running, or when `timeoutMs` elapses — whichever
+   * comes first. Returns the number of handlers still running, so a non-zero
+   * result means the deadline was hit and they are being abandoned.
+   */
+  async drain(timeoutMs: number): Promise<number> {
+    if (this.running === 0) return 0;
+    await Promise.race([
+      new Promise<void>((resolve) => this.idleWaiters.push(resolve)),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    return this.running;
+  }
+}
+
+/**
+ * Routes every tool callback registered on this server through the tracker.
+ * `registerTool` is the single funnel every tool passes through
+ * (registry.ts → wrapHandler.ts → server.registerTool), so wrapping it here
+ * keeps in-flight accounting a server-lifecycle concern instead of leaking
+ * shutdown state into the tool layer.
+ */
+function trackToolCalls(server: McpServer, inFlight: InFlightTracker): void {
+  const register = server.registerTool.bind(server) as (
+    name: string,
+    config: unknown,
+    cb: (...args: unknown[]) => unknown,
+  ) => unknown;
+  (server as unknown as { registerTool: typeof register }).registerTool = (name, config, cb) =>
+    register(name, config, (...args: unknown[]) => inFlight.track(async () => cb(...args)));
+}
 
 export function createApp(config: AppConfig, redis: RedisType): Express {
   const app = express();
@@ -115,8 +185,11 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
   const apiTokenStore = new ApiTokenStore(redis, config.tokenEncryptionKey);
   const orgAdminVerifier = new OrgAdminVerifier(redis, config);
 
-  // 7. Session map.
+  // 7. Session map + shutdown state.
   const sessions = new Map<string, SessionEntry>();
+  const inFlight = new InFlightTracker();
+  // Flipped by gojiraShutdown; /mcp refuses new work once set.
+  let draining = false;
 
   function lookupSessionId(req: Request): string | null {
     const header = req.headers["mcp-session-id"];
@@ -128,6 +201,9 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
     const server = new McpServer({ name: "gojira-mcp", version: "0.1.0" });
     const auth = req.auth;
     const clientId = auth?.clientId ?? "unknown";
+    // Must precede registerSessionTools — it wraps registerTool, so only tools
+    // registered after this call are counted.
+    trackToolCalls(server, inFlight);
     registerSessionTools(
       server,
       {
@@ -194,10 +270,30 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
   }, SESSION_SWEEP_INTERVAL_MS);
   sweeper.unref?.();
 
-  // Exposed for graceful shutdown (index.ts): stop the sweeper and close every
-  // live transport so in-flight streams end cleanly.
+  // Exposed for graceful shutdown (index.ts). Order matters:
+  //   1. stop admitting new work — /mcp starts answering 503 — and stop the sweeper;
+  //   2. wait for tool handlers already inside dispatch to return, so a mutation
+  //      mid journal/audit write isn't cut off by the process exiting under it.
+  //      transport.close() does NOT wait for a running handler, so closing first
+  //      would leave exactly that gap;
+  //   3. close every live transport, ending in-flight streams cleanly.
+  // The drain is bounded: handlers still running at DRAIN_TIMEOUT_MS are logged
+  // and abandoned, so shutdown always terminates.
   app.locals.gojiraShutdown = async (): Promise<void> => {
+    draining = true;
     clearInterval(sweeper);
+
+    if (inFlight.count > 0) {
+      logger.info({ in_flight: inFlight.count }, "Draining in-flight tool calls");
+    }
+    const stranded = await inFlight.drain(DRAIN_TIMEOUT_MS);
+    if (stranded > 0) {
+      logger.warn(
+        { in_flight: stranded, timeout_ms: DRAIN_TIMEOUT_MS },
+        "Drain deadline reached; abandoning in-flight tool calls",
+      );
+    }
+
     const entries = [...sessions.values()];
     sessions.clear();
     await Promise.allSettled(entries.map((e) => e.transport.close()));
@@ -206,8 +302,19 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
   // 8. /mcp transport handlers — bearer-protected.
   const bearer = requireBearerAuth({ verifier: oauthProvider });
 
+  // Once draining, refuse work that would start a new handler or stream: the
+  // drain only waits for calls already in dispatch, and anything admitted after
+  // it starts would race the transport teardown. DELETE still passes so clients
+  // can close sessions.
+  const rejectIfDraining = (res: Response): boolean => {
+    if (!draining) return false;
+    res.status(503).json({ error: "server_shutting_down" });
+    return true;
+  };
+
   app.post("/mcp", bearer, async (req, res, next) => {
     try {
+      if (rejectIfDraining(res)) return;
       const sid = lookupSessionId(req);
       if (sid) {
         // A session id was supplied. If we don't know it (stale/expired), reply
@@ -232,6 +339,7 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
 
   app.get("/mcp", bearer, async (req, res, next) => {
     try {
+      if (rejectIfDraining(res)) return;
       const sid = lookupSessionId(req);
       const entry = sid ? sessions.get(sid) : undefined;
       if (!entry) {

@@ -37,15 +37,23 @@ console with the **union** of every Atlassian scope it might need.
 time. Common scope sets:
 
 ```bash
-# Daily admin (JSM, automation, custom fields, projects)
+# Daily admin (custom fields, projects, schemes, agile, filters/dashboards).
+# NOTE: JSM (jsm.*/forms.*), automation and Confluence admin consume NO OAuth
+# scope — they ride the per-user API token — so nothing here is for them.
 ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account \
     read:jira-work write:jira-work \
-    manage:jira-project manage:jira-configuration \
-    read:servicedesk-request write:servicedesk-request \
-    manage:servicedesk-customer
+    manage:jira-project manage:jira-configuration
 
-# Adds workflow/scheme writes (Confluence admin needs NO OAuth scopes —
-# it rides the per-user API token; see the granular-scopes section below)
+# Adds Assets/CMDB. read:servicedesk-request is here for *Assets workspace
+# discovery* (an OAuth call), not for the JSM tools.
+ATLASSIAN_OAUTH_SCOPES=... \
+    read:servicedesk-request \
+    read:cmdb-object:jira write:cmdb-object:jira \
+    read:cmdb-schema:jira write:cmdb-schema:jira \
+    read:cmdb-type:jira write:cmdb-type:jira \
+    read:cmdb-attribute:jira write:cmdb-attribute:jira
+
+# Adds workflow/scheme writes
 ATLASSIAN_OAUTH_SCOPES=... \
     manage:jira-webhook
 ```
@@ -65,9 +73,25 @@ scopes alongside the classic ones where you enable the group:
   API they depend on returns **410 Gone** on the OAuth host (verified live).
   See [api-token-side-channel.md](api-token-side-channel.md).
 - **Assets / CMDB** — every `assets.*` tool authenticates with the OAuth bearer
-  against `api.atlassian.com/jsm/assets/...`. Add
-  `read:cmdb-object:jira`, `write:cmdb-object:jira`,
-  `read:cmdb-schema:jira`, `write:cmdb-schema:jira`.
+  against `api.atlassian.com/jsm/assets/...`. All **eight** granular CMDB scopes
+  are required for the full group (object/schema/type/attribute × read/write):
+
+  ```
+  read:cmdb-object:jira     write:cmdb-object:jira
+  read:cmdb-schema:jira     write:cmdb-schema:jira
+  read:cmdb-type:jira       write:cmdb-type:jira
+  read:cmdb-attribute:jira  write:cmdb-attribute:jira
+  ```
+
+  Plus **`read:servicedesk-request`** — Assets *workspace discovery* calls
+  `GET /rest/servicedeskapi/assets/workspace` with the OAuth bearer
+  (`src/atlassian/assetsWorkspace.ts`), and every `assets.*` tool goes through
+  it first. Omit it and the whole group 401s before it reaches the CMDB API.
+  This scope belongs to Assets, **not** to the JSM tool groups — `jsm.*` and
+  `forms.*` are `authMethod: "api_token"` and consume no OAuth scope.
+
+  Note: a `403` from the Assets API on a non-Premium JSM site is a **licensing**
+  limit, not a scope problem — adding scopes will not clear it.
 - **Jira automation** — no OAuth scope exists for the automation public API
   (there is no Automation entry in the developer-console scope list), and none
   is needed: `read_automation`/`write_automation` bypass OAuth entirely and

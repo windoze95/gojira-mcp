@@ -3,6 +3,30 @@ import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
 import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
 import { reverters } from "../../operations/revert.js";
+import { NotFoundError } from "../../middleware/errorHandler.js";
+
+/**
+ * Read a single custom field.
+ *
+ * There is NO single-field GET in Jira Cloud: `GET /rest/api/3/field/{fieldId}`
+ * returns **405 Method Not Allowed** (that path is PUT/DELETE only) — verified
+ * live. The paginated search endpoint filtered by id is the only way to read one
+ * field, and it is what the before-snapshots of update/delete depend on, so this
+ * helper is shared by every read path in this file.
+ */
+async function readField(
+  ctx: import("../types.js").ToolContext,
+  fieldId: string,
+): Promise<Record<string, unknown>> {
+  const resp = await ctx.client
+    .jira()
+    .get<{ values?: Array<Record<string, unknown>> }>(
+      `/rest/api/3/field/search?id=${encodeURIComponent(fieldId)}`,
+    );
+  const field = resp.data.values?.[0];
+  if (!field) throw new NotFoundError(`No custom field found with id ${fieldId}`);
+  return field;
+}
 
 export const customFieldTools = (): AnyToolDef[] => [
   defineTool({
@@ -38,11 +62,12 @@ export const customFieldTools = (): AnyToolDef[] => [
     needsCloudId: true,
     input: { fieldId: z.string().min(1), include_contexts: z.boolean().optional() },
     handler: async (input, ctx) => {
-      const c = ctx.client.jira();
-      const f = await c.get<unknown>(`/rest/api/3/field/${encodeURIComponent(input.fieldId)}`);
-      if (!input.include_contexts) return f.data;
-      const ctxs = await c.get<unknown>(`/rest/api/3/field/${encodeURIComponent(input.fieldId)}/context`);
-      return { field: f.data, contexts: ctxs.data };
+      const field = await readField(ctx, input.fieldId);
+      if (!input.include_contexts) return field;
+      const ctxs = await ctx.client
+        .jira()
+        .get<unknown>(`/rest/api/3/field/${encodeURIComponent(input.fieldId)}/context`);
+      return { field, contexts: ctxs.data };
     },
   }),
 
@@ -109,7 +134,8 @@ export const customFieldTools = (): AnyToolDef[] => [
       commit: z.boolean().optional(),
     },
     handler: async (input, ctx) => {
-      const before = await ctx.client.jira().get<unknown>(`/rest/api/3/field/${encodeURIComponent(input.fieldId)}`);
+      // No single-field GET exists (405) — see readField().
+      const before = { data: await readField(ctx, input.fieldId) };
       const body: Record<string, unknown> = {};
       if (input.name !== undefined) body.name = input.name;
       if (input.description !== undefined) body.description = input.description;
@@ -152,7 +178,8 @@ export const customFieldTools = (): AnyToolDef[] => [
     destructive: true,
     input: { fieldId: z.string().min(1), commit: z.boolean().optional() },
     handler: async (input, ctx) => {
-      const before = await ctx.client.jira().get<unknown>(`/rest/api/3/field/${encodeURIComponent(input.fieldId)}`);
+      // No single-field GET exists (405) — see readField().
+      const before = { data: await readField(ctx, input.fieldId) };
       if (input.commit !== true) {
         return buildDeleteDryRun({
           tool: "customfields.deleteCustomField",

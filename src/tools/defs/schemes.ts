@@ -564,7 +564,11 @@ reverters.register("schemes.updateNotificationScheme", async (entry, anyCtx) => 
   if (!before) throw new Error("Cannot revert: journal entry has no captured `before` scheme.");
   const body: Record<string, unknown> = {};
   if (before.name !== undefined) body.name = before.name;
-  if (before.description !== undefined) body.description = before.description;
+  // PUT /notificationscheme/{id} is a PARTIAL update, and Jira omits `description`
+  // entirely from GET when a scheme has none. Omitting it here would leave a
+  // description the update ADDED in place — a silently failed revert. Always send
+  // it, falling back to "" so the added description is cleared.
+  body.description = before.description ?? "";
   const resp = await ctx.client.jira().put<unknown>(`/rest/api/3/notificationscheme/${encodeURIComponent(id)}`, body);
   return { reverted: id, response: resp.data };
 });
