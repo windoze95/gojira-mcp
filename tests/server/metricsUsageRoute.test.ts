@@ -108,5 +108,8 @@ describe("GET /metrics/usage", () => {
     expect(body.totals).toEqual({ calls: 2, errors: 1 });
     expect(body.byTool["projects.listJiraProjects"]).toEqual({ calls: 2, errors: 0 });
     expect(body.byUser["acct-2"]).toEqual({ calls: 0, errors: 1 });
+
+    const allTime = (body as unknown as { allTime: { totals: { calls: number; errors: number } } }).allTime;
+    expect(allTime.totals).toEqual({ calls: 2, errors: 1 });
   });
 });

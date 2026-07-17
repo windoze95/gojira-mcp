@@ -10,15 +10,20 @@ export interface UsageCounts {
   errors: number;
 }
 
-export interface UsageSummary {
-  days: number;
-  from: string;
-  to: string;
+export interface UsageAggregates {
   totals: UsageCounts;
   byTool: Record<string, UsageCounts>;
   byUser: Record<string, UsageCounts>;
-  byDay: Record<string, UsageCounts>;
   byToolUser: Record<string, Record<string, UsageCounts>>;
+}
+
+export interface UsageSummary extends UsageAggregates {
+  days: number;
+  from: string;
+  to: string;
+  byDay: Record<string, UsageCounts>;
+  /** Cumulative since metrics were first deployed; not limited by retention. */
+  allTime: UsageAggregates;
 }
 
 function utcDay(offsetDays = 0): string {
@@ -44,9 +49,13 @@ function emptyCounts(): UsageCounts {
  * Keys: `metrics:calls:<YYYY-MM-DD>` / `metrics:errors:<YYYY-MM-DD>` (UTC),
  * hash field `<toolName>|<accountId>` → count. Every write refreshes the
  * day-key TTL, but since a day key only receives writes during its own UTC
- * day, retention is effectively day + retentionDays. TTLs are mandatory here:
- * the Redis deployment runs noeviction, so unbounded keys would pressure the
- * credential store.
+ * day, retention is effectively day + retentionDays. TTLs are mandatory on
+ * the per-day keys: the Redis deployment runs noeviction, so unbounded
+ * per-day keys would pressure the credential store.
+ *
+ * `metrics:total:calls` / `metrics:total:errors` hold all-time cumulative
+ * counts and carry no TTL — safe under noeviction because their size is
+ * bounded by distinct tools × accounts (a few KB), not by time.
  */
 export class UsageMetrics {
   constructor(
@@ -58,18 +67,24 @@ export class UsageMetrics {
     return `metrics:${kind}:${day}`;
   }
 
+  private totalKey(kind: "calls" | "errors"): string {
+    return `metrics:total:${kind}`;
+  }
+
   /**
    * Fire-and-forget increment; must never throw or delay a tool call.
    * Callers only record calls that resolved an authenticated accountId.
    */
   record(toolName: string, accountId: string, ok: boolean): void {
     try {
-      const key = this.dayKey(ok ? "calls" : "errors", utcDay());
+      const kind = ok ? "calls" : "errors";
+      const key = this.dayKey(kind, utcDay());
       const field = `${sanitizeField(toolName)}|${sanitizeField(accountId)}`;
       this.redis
         .multi()
         .hincrby(key, field, 1)
         .expire(key, this.retentionDays * DAY_SECONDS)
+        .hincrby(this.totalKey(kind), field, 1)
         .exec()
         .catch((err: unknown) => {
           logger.debug({ err }, "Usage metrics increment failed");
@@ -89,6 +104,8 @@ export class UsageMetrics {
     const pipeline = this.redis.pipeline();
     for (const day of dayList) pipeline.hgetall(this.dayKey("calls", day));
     for (const day of dayList) pipeline.hgetall(this.dayKey("errors", day));
+    pipeline.hgetall(this.totalKey("calls"));
+    pipeline.hgetall(this.totalKey("errors"));
     const results = (await pipeline.exec()) ?? [];
 
     const summary: UsageSummary = {
@@ -100,25 +117,34 @@ export class UsageMetrics {
       byUser: {},
       byDay: {},
       byToolUser: {},
+      allTime: {
+        totals: emptyCounts(),
+        byTool: {},
+        byUser: {},
+        byToolUser: {},
+      },
     };
 
     const ingest = (
-      day: string,
+      target: UsageAggregates,
       fields: Record<string, string>,
       kind: keyof UsageCounts,
+      day?: string,
     ): void => {
       for (const [field, raw] of Object.entries(fields)) {
         const count = parseInt(raw, 10);
         if (!Number.isFinite(count)) continue;
         const [toolName, accountId = "unknown"] = field.split("|");
 
-        summary.totals[kind] += count;
-        (summary.byTool[toolName] ??= emptyCounts())[kind] += count;
-        (summary.byUser[accountId] ??= emptyCounts())[kind] += count;
-        (summary.byDay[day] ??= emptyCounts())[kind] += count;
-        ((summary.byToolUser[toolName] ??= {})[accountId] ??= emptyCounts())[
+        target.totals[kind] += count;
+        (target.byTool[toolName] ??= emptyCounts())[kind] += count;
+        (target.byUser[accountId] ??= emptyCounts())[kind] += count;
+        ((target.byToolUser[toolName] ??= {})[accountId] ??= emptyCounts())[
           kind
         ] += count;
+        if (day !== undefined) {
+          (summary.byDay[day] ??= emptyCounts())[kind] += count;
+        }
       }
     };
 
@@ -126,11 +152,20 @@ export class UsageMetrics {
       const [callsErr, calls] = results[i] ?? [null, {}];
       const [errorsErr, errors] = results[dayList.length + i] ?? [null, {}];
       if (!callsErr && calls) {
-        ingest(dayList[i], calls as Record<string, string>, "calls");
+        ingest(summary, calls as Record<string, string>, "calls", dayList[i]);
       }
       if (!errorsErr && errors) {
-        ingest(dayList[i], errors as Record<string, string>, "errors");
+        ingest(summary, errors as Record<string, string>, "errors", dayList[i]);
       }
+    }
+
+    const [totalCallsErr, totalCalls] = results[dayList.length * 2] ?? [null, {}];
+    const [totalErrorsErr, totalErrors] = results[dayList.length * 2 + 1] ?? [null, {}];
+    if (!totalCallsErr && totalCalls) {
+      ingest(summary.allTime, totalCalls as Record<string, string>, "calls");
+    }
+    if (!totalErrorsErr && totalErrors) {
+      ingest(summary.allTime, totalErrors as Record<string, string>, "errors");
     }
 
     return summary;
