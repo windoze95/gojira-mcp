@@ -92,6 +92,12 @@ const ConfigSchema = z
     // Refresh reuse alerting
     GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK: z.string().url().optional(),
 
+    // Usage metrics read endpoint (GET /metrics/usage); disabled when unset.
+    GOJIRA_METRICS_TOKEN: z
+      .string()
+      .min(16, "GOJIRA_METRICS_TOKEN must be at least 16 characters")
+      .optional(),
+
     // Atlassian NearLimit tuning
     GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT: z.coerce.number().int().nonnegative().default(5),
 
@@ -185,6 +191,8 @@ export type AppConfig = Readonly<{
     orgAdminTarget: string;
   };
   journal: { ttlDays: number };
+  /** Bearer token for GET /metrics/usage; the route is disabled when null. */
+  metricsToken: string | null;
   refreshReuseAlertWebhook: string | null;
   nearLimitExtraDeduct: number;
   /**
@@ -251,6 +259,7 @@ export function loadConfig(): AppConfig {
       orgAdminTarget: v.GOJIRA_ORG_ADMIN_AUDIT_LOG_TARGET ?? v.GOJIRA_AUDIT_LOG_TARGET,
     },
     journal: { ttlDays: v.GOJIRA_OPERATION_JOURNAL_TTL_DAYS },
+    metricsToken: v.GOJIRA_METRICS_TOKEN ?? null,
     refreshReuseAlertWebhook: v.GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK ?? null,
     nearLimitExtraDeduct: v.GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT,
     enabledGroups: v.GOJIRA_ENABLED_GROUPS,

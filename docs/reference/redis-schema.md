@@ -22,6 +22,8 @@ TTLs and types are exact; sizes are typical.
 | `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible. |
 | `op_journal_idx:<accountId>` | Sorted set (score = completedAt ms) | same | none | Index for `gojira.listRecentOperations`. |
 | `assets_workspace:<cloudId>` | String | 24 hours | none | Cached Assets workspaceId per cloud site. |
+| `metrics:calls:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Successful tool calls per tool/account/UTC day. Written fire-and-forget from the tool wrapper; read by `GET /metrics/usage`. |
+| `metrics:errors:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Failed tool calls, same layout as `metrics:calls:*`. |
 
 There is deliberately **no key for org-admin caller verification**.
 That gate is a static allowlist read from `GOJIRA_ORG_ADMIN_ACCOUNT_IDS`

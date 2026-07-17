@@ -75,6 +75,7 @@ docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
 
 The server listens on `MCP_PORT` (default `8081`) with:
 - `GET  /health` — unauthenticated liveness + Redis ping
+- `GET  /metrics/usage` — per-tool/per-user usage counters (only when `GOJIRA_METRICS_TOKEN` is set)
 - `GET  /.well-known/oauth-authorization-server` — OAuth metadata
 - `POST /register` — RFC 7591 client registration
 - `GET  /authorize` — OAuth 2.1 authorize entry

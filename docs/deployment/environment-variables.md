@@ -44,6 +44,12 @@ known group names at startup; unknown values fail loudly.
 |---|---|---|
 | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` | `30` | TTL on `op_journal:*` keys and the index. |
 
+## Usage metrics
+
+| Var | Default | Notes |
+|---|---|---|
+| `GOJIRA_METRICS_TOKEN` | none | Bearer token for `GET /metrics/usage` (min 16 chars). The route is not registered when unset. Counters live in `metrics:*` Redis keys — see [Redis schema](../reference/redis-schema.md). |
+
 ## Refresh-reuse alerting
 
 | Var | Default | Notes |

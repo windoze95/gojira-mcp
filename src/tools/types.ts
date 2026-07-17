@@ -7,6 +7,7 @@ import type { StoredToken } from "../auth/tokenStore.js";
 import type { StoredApiToken } from "../auth/apiTokenStore.js";
 import type { AppConfig } from "../config.js";
 import type { AuditSink } from "../utils/audit.js";
+import type { UsageMetrics } from "../metrics/usage.js";
 import type { Logger } from "../utils/logger.js";
 
 import type { PermissionGroup } from "./permissionGroups.js";
@@ -104,6 +105,7 @@ export interface ToolDeps {
   rateLimiter: RateLimiter;
   audit: AuditSink;
   journal: OperationJournal;
+  usageMetrics: UsageMetrics;
   tokenRefresher: import("../auth/tokenRefresh.js").TokenRefresher;
   apiTokenStore: import("../auth/apiTokenStore.js").ApiTokenStore;
   orgAdminVerifier: import("../auth/orgAdminVerifier.js").OrgAdminVerifier;

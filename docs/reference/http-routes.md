@@ -7,6 +7,7 @@ Every route mounted by gojira-mcp, with auth requirements and behaviour.
 | Route | Method | Behaviour |
 |---|---|---|
 | `/health` | GET | Liveness + Redis ping. Returns 200 with JSON when healthy, 503 when Redis is unreachable. |
+| `/metrics/usage` | GET | Aggregated per-tool/per-user usage counters (`?days=N`, default 30, max 400). Only registered when `GOJIRA_METRICS_TOKEN` is set, and requires it as a bearer token (constant-time compare) — 401 otherwise. 404 when unconfigured. |
 | `/.well-known/oauth-authorization-server` | GET | RFC 8414 OAuth metadata: issuer, authorization/token/registration/revocation endpoints, supported scopes, etc. |
 | `/.well-known/oauth-protected-resource` | GET | RFC 9728 protected-resource metadata if requested by the client. |
 
