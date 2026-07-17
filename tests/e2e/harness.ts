@@ -25,6 +25,7 @@ import { OperationJournal } from "../../src/operations/journal.js";
 import { RateLimiter } from "../../src/middleware/rateLimiter.js";
 import { AuthRequiredError } from "../../src/middleware/errorHandler.js";
 import { registerWrappedTool } from "../../src/tools/wrapHandler.js";
+import { UsageMetrics } from "../../src/metrics/usage.js";
 import { allTools } from "../../src/tools/defs/index.js";
 import type { ToolDeps } from "../../src/tools/types.js";
 import type { AuditSink } from "../../src/utils/audit.js";
@@ -151,6 +152,7 @@ export function buildHarness(): E2EHarness {
     rateLimiter,
     audit,
     journal,
+    usageMetrics: new UsageMetrics(redis),
     tokenRefresher,
     apiTokenStore,
     orgAdminVerifier,

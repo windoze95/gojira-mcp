@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -16,6 +16,7 @@ import { ApiTokenStore } from "./auth/apiTokenStore.js";
 import { OrgAdminVerifier } from "./auth/orgAdminVerifier.js";
 import { RateLimiter } from "./middleware/rateLimiter.js";
 import { OperationJournal } from "./operations/journal.js";
+import { UsageMetrics, MAX_SUMMARY_DAYS } from "./metrics/usage.js";
 import { buildAuditSink } from "./utils/audit.js";
 import { logger } from "./utils/logger.js";
 import { registerSessionTools } from "./tools/registry.js";
@@ -38,6 +39,13 @@ const SESSION_SWEEP_INTERVAL_MS = 60 * 1000;
  * gives up) before the force-exit backstop fires.
  */
 const DRAIN_TIMEOUT_MS = 10_000;
+
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  // Hash both sides so inputs of different lengths still compare in constant time.
+  const digestA = createHash("sha256").update(a).digest();
+  const digestB = createHash("sha256").update(b).digest();
+  return timingSafeEqual(digestA, digestB);
+}
 
 /**
  * Counts tool handlers that have entered dispatch and not yet returned.
@@ -160,6 +168,29 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
     });
   });
 
+  // 3b. /metrics/usage — aggregated per-tool/per-user usage counters. Only
+  // registered when GOJIRA_METRICS_TOKEN is configured; gated by that token.
+  const usageMetrics = new UsageMetrics(redis);
+  if (config.metricsToken) {
+    const expectedAuth = `Bearer ${config.metricsToken}`;
+    app.get("/metrics/usage", async (req: Request, res: Response) => {
+      if (!timingSafeEqualStrings(req.headers.authorization ?? "", expectedAuth)) {
+        res.status(401).json({ error: "unauthorized" });
+        return;
+      }
+      const daysParam = Number(req.query.days);
+      const days = Number.isFinite(daysParam)
+        ? Math.min(Math.max(Math.trunc(daysParam), 1), MAX_SUMMARY_DAYS)
+        : 30;
+      try {
+        res.json(await usageMetrics.summary(days));
+      } catch (err) {
+        logger.error({ err }, "Failed to build usage metrics summary");
+        res.status(500).json({ error: "metrics_summary_failed" });
+      }
+    });
+  }
+
   // 4. OAuth provider + auth router.
   const oauthProvider = new GojiraOAuthProvider({ redis, config });
   const issuerUrl = new URL(config.mcpServerUrl);
@@ -212,6 +243,7 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
         rateLimiter,
         audit,
         journal,
+        usageMetrics,
         tokenRefresher,
         apiTokenStore,
         orgAdminVerifier,

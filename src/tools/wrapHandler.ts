@@ -70,6 +70,11 @@ export function registerWrappedTool(
         request: Record<string, unknown>,
         cloudId: string | null,
       ): void => {
+        // Durable usage counters alongside the (write-only) audit stream; only
+        // attributable calls are counted.
+        if (accountId) {
+          deps.usageMetrics.record(def.name, accountId, outcome !== "failure");
+        }
         deps.audit.emit(
           {
             ts: new Date().toISOString(),
