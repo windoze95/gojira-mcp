@@ -39,6 +39,14 @@ describe("UsageMetrics", () => {
     const ttl = await redis.ttl(`metrics:calls:${TODAY}`);
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(400 * 86400);
+
+    // All-time hash mirrors the counts and never expires
+    const totals = await redis.hgetall("metrics:total:calls");
+    expect(totals).toEqual({
+      "projects.listJiraProjects|acct-1": "2",
+      "projects.listJiraProjects|acct-2": "1",
+    });
+    expect(await redis.ttl("metrics:total:calls")).toBe(-1);
   });
 
   it("uses the errors hash for failed calls and strips the field separator", async () => {
@@ -47,6 +55,9 @@ describe("UsageMetrics", () => {
 
     const fields = await redis.hgetall(`metrics:errors:${TODAY}`);
     expect(fields).toEqual({ "weird_tool|acct_1": "1" });
+    expect(await redis.hgetall("metrics:total:errors")).toEqual({
+      "weird_tool|acct_1": "1",
+    });
   });
 
   it("swallows redis failures without throwing", async () => {
@@ -86,6 +97,10 @@ describe("UsageMetrics", () => {
       calls: 1,
       errors: 1,
     });
+    // All activity is from today, so allTime mirrors the windowed view
+    expect(summary.allTime.totals).toEqual({ calls: 3, errors: 1 });
+    expect(summary.allTime.byTool).toEqual(summary.byTool);
+    expect(summary.allTime.byUser).toEqual(summary.byUser);
   });
 
   it("caps the window at MAX_SUMMARY_DAYS and floors it at 1", async () => {
@@ -95,5 +110,6 @@ describe("UsageMetrics", () => {
     const floored = await metrics.summary(-3);
     expect(floored.days).toBe(1);
     expect(floored.totals).toEqual({ calls: 0, errors: 0 });
+    expect(floored.allTime.totals).toEqual({ calls: 0, errors: 0 });
   });
 });

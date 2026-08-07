@@ -24,6 +24,8 @@ TTLs and types are exact; sizes are typical.
 | `assets_workspace:<cloudId>` | String | 24 hours | none | Cached Assets workspaceId per cloud site. |
 | `metrics:calls:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Successful tool calls per tool/account/UTC day. Written fire-and-forget from the tool wrapper; read by `GET /metrics/usage`. |
 | `metrics:errors:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Failed tool calls, same layout as `metrics:calls:*`. |
+| `metrics:total:calls` | Hash (`<tool>\|<accountId>` → count) | None (permanent) | none | All-time successful tool calls. No TTL is safe under noeviction: size is bounded by tools × accounts, not time. Returned as `allTime` by `GET /metrics/usage`. |
+| `metrics:total:errors` | Hash (`<tool>\|<accountId>` → count) | None (permanent) | none | All-time failed tool calls, same layout. |
 
 There is deliberately **no key for org-admin caller verification**.
 That gate is a static allowlist read from `GOJIRA_ORG_ADMIN_ACCOUNT_IDS`
