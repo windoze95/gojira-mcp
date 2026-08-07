@@ -3,6 +3,7 @@ import { defineTool } from "./defineTool.js";
 import type { AnyToolDef } from "./defineTool.js";
 import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryRun.js";
 import { reverters } from "../../operations/revert.js";
+import { AUTOMATION_RULE_UI_URI } from "../../ui/appResources.js";
 
 /**
  * Jira Cloud Automation rules ("business rules"), via the GA Automation Rule
@@ -39,6 +40,7 @@ export const automationTools = (): AnyToolDef[] => [
     group: "read_automation",
     authMethod: "api_token",
     needsCloudId: true,
+    ui: { resourceUri: AUTOMATION_RULE_UI_URI },
     input: {
       cursor: z.string().optional(),
       limit: z.number().int().positive().max(100).default(50).optional(),
@@ -56,6 +58,7 @@ export const automationTools = (): AnyToolDef[] => [
     group: "read_automation",
     authMethod: "api_token",
     needsCloudId: true,
+    ui: { resourceUri: AUTOMATION_RULE_UI_URI },
     input: { ruleId: z.string().min(1).describe("The rule UUID.") },
     handler: async (input, ctx) => {
       const resp = await ctx.client.automation().get<unknown>(`${BASE}/rule/${encodeURIComponent(input.ruleId)}`);

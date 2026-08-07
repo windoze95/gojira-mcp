@@ -16,3 +16,4 @@ tests
 .tsbuildinfo
 docker-compose*.yml
 Dockerfile
+ui/dist

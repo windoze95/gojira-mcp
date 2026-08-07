@@ -5,6 +5,8 @@ import { defineTool } from "./defineTool.js";
 import { ApiTokenStore } from "../../auth/apiTokenStore.js";
 import { reverters, assertRevertible } from "../../operations/revert.js";
 import { ValidationError, NotFoundError } from "../../middleware/errorHandler.js";
+import { buildDryRunIfNotCommitted } from "../../consent/dryRun.js";
+import { JOURNAL_UI_URI } from "../../ui/appResources.js";
 
 export const utilityTools = (): AnyToolDef[] => [
   defineTool({
@@ -222,6 +224,7 @@ export const utilityTools = (): AnyToolDef[] => [
     group: "utility",
     authMethod: "oauth",
     needsCloudId: false,
+    ui: { resourceUri: JOURNAL_UI_URI },
     input: {
       limit: z.number().int().positive().max(200).default(25).optional(),
       since: z.string().datetime().optional(),
@@ -256,6 +259,7 @@ export const utilityTools = (): AnyToolDef[] => [
     group: "utility",
     authMethod: "oauth",
     needsCloudId: false,
+    ui: { resourceUri: JOURNAL_UI_URI },
     input: { op_id: z.string().uuid() },
     handler: async (input, ctx) => {
       const entry = await ctx.journal.get(ctx.accountId, input.op_id);
@@ -289,16 +293,19 @@ export const utilityTools = (): AnyToolDef[] => [
         );
       }
       if (input.commit !== true) {
-        return {
-          dry_run: true,
+        // Standard dry-run shape (consent/dryRun.ts) so this renders in the
+        // same confirm-op card as every other destructive tool. Committing the
+        // revert moves live state from the original op's after back to its
+        // before, so that pair *is* the diff.
+        const dry = buildDryRunIfNotCommitted(input, {
+          tool: "gojira.revertOperation",
+          target: entry.target,
+          before: entry.after,
+          after: entry.before,
           message: `Would revert operation ${entry.opId} (${entry.tool}). Re-invoke with commit:true to apply.`,
-          original: {
-            tool: entry.tool,
-            target: entry.target,
-            before: entry.before,
-            after: entry.after,
-          },
-        };
+          includeFullState: true,
+        })!;
+        return { ...dry, original: { op_id: entry.opId, tool: entry.tool } };
       }
       const reverter = reverters.resolve(entry.tool);
       if (!reverter) {

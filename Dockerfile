@@ -9,6 +9,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
+COPY ui ./ui
 RUN npm run build && npm prune --omit=dev
 
 # --- runtime ---
@@ -28,6 +29,7 @@ WORKDIR /app
 
 COPY --from=builder --chown=mcp:mcp /app/node_modules ./node_modules
 COPY --from=builder --chown=mcp:mcp /app/dist ./dist
+COPY --from=builder --chown=mcp:mcp /app/ui/dist ./ui/dist
 COPY --from=builder --chown=mcp:mcp /app/package.json ./package.json
 
 ENV MCP_PORT=8081

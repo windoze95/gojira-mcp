@@ -98,6 +98,11 @@ const ConfigSchema = z
       .min(16, "GOJIRA_METRICS_TOKEN must be at least 16 characters")
       .optional(),
 
+    // MCP Apps (interactive UI) — attach ui:// templates to tools and serve
+    // them as resources. Rendering also requires the bundles from
+    // `npm run build:ui`; without them the flag is inert.
+    GOJIRA_UI_ENABLED: truthy.default("true"),
+
     // Atlassian NearLimit tuning
     GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT: z.coerce.number().int().nonnegative().default(5),
 
@@ -193,6 +198,8 @@ export type AppConfig = Readonly<{
   journal: { ttlDays: number };
   /** Bearer token for GET /metrics/usage; the route is disabled when null. */
   metricsToken: string | null;
+  /** MCP Apps (SEP-1865) interactive UI templates on/off for this deployment. */
+  ui: { enabled: boolean };
   refreshReuseAlertWebhook: string | null;
   nearLimitExtraDeduct: number;
   /**
@@ -260,6 +267,7 @@ export function loadConfig(): AppConfig {
     },
     journal: { ttlDays: v.GOJIRA_OPERATION_JOURNAL_TTL_DAYS },
     metricsToken: v.GOJIRA_METRICS_TOKEN ?? null,
+    ui: { enabled: v.GOJIRA_UI_ENABLED },
     refreshReuseAlertWebhook: v.GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK ?? null,
     nearLimitExtraDeduct: v.GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT,
     enabledGroups: v.GOJIRA_ENABLED_GROUPS,
