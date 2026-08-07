@@ -8,6 +8,8 @@ export interface DefineToolArgs<Shape extends z.ZodRawShape, Output> {
   authMethod: AuthMethod;
   destructive?: boolean;
   needsCloudId?: boolean;
+  /** MCP Apps template for UI-capable hosts; see ToolDefinition.ui. */
+  ui?: { resourceUri: string };
   input?: Shape;
   handler: (args: z.infer<z.ZodObject<Shape>>, ctx: ToolContext) => Promise<Output>;
 }
@@ -33,6 +35,7 @@ export function defineTool<Shape extends z.ZodRawShape, Output>(
     authMethod: args.authMethod,
     destructive: args.destructive ?? false,
     needsCloudId: args.needsCloudId ?? false,
+    ...(args.ui ? { ui: args.ui } : {}),
     inputSchema,
     handler: args.handler,
   };

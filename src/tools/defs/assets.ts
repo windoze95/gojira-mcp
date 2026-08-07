@@ -5,6 +5,7 @@ import { buildDryRunIfNotCommitted, buildDeleteDryRun } from "../../consent/dryR
 import { getAssetsWorkspaceId } from "../../atlassian/assetsWorkspace.js";
 import { ToolError } from "../../middleware/errorHandler.js";
 import { reverters } from "../../operations/revert.js";
+import { AQL_TABLE_UI_URI } from "../../ui/appResources.js";
 
 /**
  * Assets (Insight) — OAuth bearer + CMDB scopes.
@@ -542,6 +543,7 @@ export const assetsTools = (): AnyToolDef[] => [
     group: "read_assets",
     authMethod: "oauth",
     needsCloudId: true,
+    ui: { resourceUri: AQL_TABLE_UI_URI },
     input: {
       qlQuery: z.string().min(1),
       page: z.number().int().positive().default(1).optional(),

@@ -20,7 +20,8 @@ session, not as a replacement.
 | **Auth** | OAuth 2.1 to MCP clients; OAuth 2.0 3LO to Atlassian; per-user API token side-channel; org-admin API token (separate gate) |
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
 | **Tool count** | 155 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
-| **Tests** | 66 unit tests across 13 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, and site-pinning paths — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
+| **Interactive UI** | MCP Apps (SEP-1865): every destructive tool renders its dry-run as a diff/confirm card; journal timeline, Assets AQL table, and automation-rule tree viewers. Renders in claude.ai/Desktop/mobile and ChatGPT dev-mode hosts; text-only clients unaffected. `GOJIRA_UI_ENABLED` — see [MCP Apps UI](docs/architecture/mcp-apps-ui.md) |
+| **Tests** | 93 unit tests across 19 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, site-pinning, and MCP Apps metadata/resources — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
 
 ---
 

@@ -91,6 +91,13 @@ export interface ToolDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O = unkno
   destructive: boolean;
   /** Required cloudId binding; false for tools that don't address a Jira/Confluence tenant. */
   needsCloudId: boolean;
+  /**
+   * MCP Apps (SEP-1865) template this tool renders with in UI-capable hosts.
+   * Optional — destructive tools fall back to the confirm-op card (see
+   * src/ui/appResources.ts). Ignored when the deployment has UI disabled or
+   * the template bundles are not built.
+   */
+  ui?: { resourceUri: string };
   /** Zod schema for input. */
   inputSchema: I;
   handler: (input: z.infer<I>, ctx: ToolContext) => Promise<O>;

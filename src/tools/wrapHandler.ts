@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { z } from "zod";
+import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { RESOURCE_URI_META_KEY } from "@modelcontextprotocol/ext-apps/server";
+import { z } from "zod";
 
 import type { ToolContext, ToolDefinition, ToolDeps } from "./types.js";
 import {
@@ -26,6 +27,40 @@ import { logger } from "../utils/logger.js";
 import type { JournalEntry } from "../operations/journal.js";
 
 /**
+ * Every tool responds with the same `{success, result|error}` envelope, so a
+ * single loose output schema states that contract for all of them. Declaring
+ * it makes the SDK require (and hosts trust) `structuredContent` on success
+ * results — which is what MCP Apps views and ChatGPT widgets consume — without
+ * over-promising per-tool result shapes, which are upstream Atlassian bodies.
+ */
+export const OUTPUT_ENVELOPE_SHAPE = {
+  success: z.boolean(),
+  result: z.unknown().optional(),
+  error: z.unknown().optional(),
+};
+
+/**
+ * Leaf-verb classification for readOnlyHint. Deliberately conservative: only
+ * verbs that are pure reads in this catalog qualify (aql → aqlSearch). Verbs
+ * with side effects or ambiguity (export, validate, start, bind…) stay
+ * unannotated so hosts fall back to their confirm-by-default write handling.
+ */
+const READ_ONLY_LEAF_RE = /^(?:get|list|search|query|aql|health|whoami)/;
+
+function deriveAnnotations(def: ToolDefinition<z.ZodTypeAny, unknown>): ToolAnnotations | undefined {
+  // openWorldHint: false throughout — every tool targets the deployment's own
+  // Atlassian tenant (a closed domain), not an open set of external entities.
+  if (def.destructive) {
+    return { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+  }
+  const leaf = def.name.split(".").pop() ?? def.name;
+  if (READ_ONLY_LEAF_RE.test(leaf)) {
+    return { readOnlyHint: true, openWorldHint: false };
+  }
+  return undefined;
+}
+
+/**
  * Registers a single tool against an MCP server, wrapping the handler in all
  * the cross-cutting concerns: authn, rate limit, operator-floor enforcement,
  * cloudId pinning, journal, audit, error normalization.
@@ -38,15 +73,28 @@ export function registerWrappedTool(
   server: McpServer,
   def: ToolDefinition<z.ZodTypeAny, unknown>,
   deps: ToolDeps,
-  opts: { clientId: string },
+  opts: {
+    clientId: string;
+    /** MCP Apps template to link via _meta; null/absent = no UI for this tool. */
+    uiResourceUri?: string | null;
+  },
 ): void {
   const schemaAsObject = def.inputSchema as unknown as z.ZodObject<z.ZodRawShape>;
   const shape = schemaAsObject.shape;
+  const annotations = deriveAnnotations(def);
+  const uiResourceUri = opts.uiResourceUri ?? null;
   server.registerTool(
     def.name,
     {
       description: def.description,
       inputSchema: shape,
+      outputSchema: OUTPUT_ENVELOPE_SHAPE,
+      ...(annotations ? { annotations } : {}),
+      // Standard MCP Apps key plus the deprecated flat alias for older hosts —
+      // the same normalization ext-apps' registerAppTool performs.
+      ...(uiResourceUri
+        ? { _meta: { ui: { resourceUri: uiResourceUri }, [RESOURCE_URI_META_KEY]: uiResourceUri } }
+        : {}),
     },
     async (args: unknown, extra: { authInfo?: { extra?: Record<string, unknown>; clientId?: string } }) => {
       const start = Date.now();
@@ -288,8 +336,18 @@ function sanitizeRequest(args: unknown): Record<string, unknown> {
 
 function toolResult(payload: unknown, isError: boolean): CallToolResult {
   const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+  // structuredContent mirrors the envelope so MCP Apps views and hosts that
+  // prefer structured results never re-parse the text block. Both call sites
+  // pass the envelope object; the string branch is defensive only (error
+  // results skip output-schema validation, success results are always the
+  // envelope).
+  const structured =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : undefined;
   return {
     content: [{ type: "text", text }],
+    ...(structured ? { structuredContent: structured } : {}),
     isError: isError || undefined,
   };
 }

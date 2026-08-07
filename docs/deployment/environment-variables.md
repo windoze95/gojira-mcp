@@ -49,6 +49,7 @@ known group names at startup; unknown values fail loudly.
 | Var | Default | Notes |
 |---|---|---|
 | `GOJIRA_METRICS_TOKEN` | none | Bearer token for `GET /metrics/usage` (min 16 chars). The route is not registered when unset. Counters live in `metrics:*` Redis keys — see [Redis schema](../reference/redis-schema.md). |
+| `GOJIRA_UI_ENABLED` | `true` | MCP Apps interactive UI: attaches `ui://` templates to tools (`_meta.ui`) and serves them as resources so UI-capable hosts render confirm cards, the journal, AQL tables, and automation rule trees. Requires the bundles from `npm run build:ui` (present in the Docker image); silently inert without them. See [MCP Apps UI](../architecture/mcp-apps-ui.md). |
 
 ## Refresh-reuse alerting
 
