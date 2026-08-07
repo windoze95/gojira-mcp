@@ -272,6 +272,8 @@ async function goToPage(page: number): Promise<void> {
   try {
     const args = { ...lastArgs, page };
     const parsed = await callTool(app, "assets.aqlSearch", args);
+    // Clear before rendering, or the freshly-rendered pager draws disabled.
+    paging = false;
     if (parsed.isError) {
       mount(renderErrorCard(parsed.envelope));
       return;
@@ -279,9 +281,8 @@ async function goToPage(page: number): Promise<void> {
     lastArgs = args;
     renderParsed(parsed);
   } catch (err) {
-    mount(h("div", { class: "banner danger" }, `Paging failed — ${err instanceof Error ? err.message : String(err)}`));
-  } finally {
     paging = false;
+    mount(h("div", { class: "banner danger" }, `Paging failed — ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 

@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { registerSessionTools } from "../../src/tools/registry.js";
+import { OUTPUT_ENVELOPE_SHAPE } from "../../src/tools/wrapHandler.js";
 import {
   AQL_TABLE_UI_URI,
   CONFIRM_OP_UI_URI,
@@ -111,5 +112,32 @@ describe("MCP Apps resources + tool metadata (end-to-end over a real session)", 
     const client = await connectedClient(makeDeps(true));
     const { tools } = await client.listTools();
     for (const t of tools) expect(t._meta).toBeUndefined();
+  });
+
+  it("success envelopes pass the SDK's output-schema validation end-to-end", async () => {
+    // Every tool declares OUTPUT_ENVELOPE_SHAPE, so the SDK validates each
+    // successful result's structuredContent against it. A mismatch here would
+    // break every successful call on every tool — exercise the exact
+    // schema/payload pairing through a real server+client round trip.
+    const server = new McpServer({ name: "t", version: "0.0.0" });
+    const payload = {
+      success: true,
+      result: { nested: { deep: true }, list: [1, "x", null], value: "ok" },
+    };
+    server.registerTool(
+      "test.echo",
+      { description: "echo", inputSchema: {}, outputSchema: OUTPUT_ENVELOPE_SHAPE },
+      async () => ({
+        content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+        structuredContent: payload,
+      }),
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const res = await client.callTool({ name: "test.echo", arguments: {} });
+    expect(res.isError ?? false).toBe(false);
+    expect(res.structuredContent).toEqual(payload);
   });
 });

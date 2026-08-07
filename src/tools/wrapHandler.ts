@@ -33,7 +33,7 @@ import type { JournalEntry } from "../operations/journal.js";
  * results — which is what MCP Apps views and ChatGPT widgets consume — without
  * over-promising per-tool result shapes, which are upstream Atlassian bodies.
  */
-const OUTPUT_ENVELOPE_SHAPE = {
+export const OUTPUT_ENVELOPE_SHAPE = {
   success: z.boolean(),
   result: z.unknown().optional(),
   error: z.unknown().optional(),
