@@ -60,8 +60,7 @@ argument. Audit records follow the wire, not the old catalog —
   `"tool": "customfields.manage"`. It is what the client actually called, and
   it is what `group` is derived from, so group-scoped queries are unaffected.
 - **`request.op` is the operation.** The audit `request` is the caller's
-  parsed input, so the op rides along in it (as does `commit` on destructive
-  tools; `outcome: "dry_run"` is the reliable signal for an uncommitted call).
+  parsed input verbatim (minus redactions), so the op rides along inside it.
   Anything that used to key on the per-endpoint tool name now keys on the
   `tool` + `request.op` pair.
 
@@ -70,9 +69,13 @@ you have alerts, dashboards, or retention rules that enumerate tool names,
 they need the new pair — a rule matching `customfields.createCustomField`
 will silently match nothing rather than fail.
 
-The journal records the same pair the same way (`entry.tool` collapsed,
+The journal records the same pair (`entry.tool` collapsed,
 `entry.request.op` for the operation), so `operation_id` still joins an audit
-record to its journal entry with no translation.
+record to its journal entry with no translation. The one divergence: the
+journal strips `commit` from its `request` as consent plumbing, while the
+audit record keeps whatever the caller sent. Don't read `commit` as the
+dry-run signal in either place — `outcome: "dry_run"` is the field that
+means it.
 
 ### Queries that span the collapse
 
