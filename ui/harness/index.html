@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gojira-mcp · MCP Apps render harness</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f5f6f7;
+    --fg: #1f2126;
+    --fg-2: #5c626c;
+    --border: #d8dbe0;
+  }
+  :root[data-theme="dark"] {
+    --bg: #1f2126;
+    --panel: #26292f;
+    --fg: #e9eaec;
+    --fg-2: #a7abb3;
+    --border: #3c4048;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); }
+  body {
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+  }
+  #harness { padding: 16px; max-width: 900px; margin: 0 auto; }
+  /* Screenshot mode: the widget alone fills the viewport. */
+  #harness.bare { padding: 0; max-width: 900px; margin: 0; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  .bar {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border);
+  }
+  .bar .label { font-weight: 600; }
+  .bar code, .index .meta { color: var(--fg-2); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .back { color: var(--fg-2); text-decoration: none; }
+  .frame-wrap {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  iframe { display: block; width: 100%; border: 0; height: 200px; background: var(--bg); }
+  .index { list-style: none; padding: 0; margin: 0; }
+  .index li { padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .index a { color: inherit; font-weight: 600; text-decoration: none; }
+  .index a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="harness"></div>
+<script type="module" src="./host.js"></script>
+</body>
+</html>

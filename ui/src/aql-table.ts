@@ -229,7 +229,7 @@ function renderTable(): HTMLElement {
     const row = h(
       "tr",
       { class: "clickable", title: "Show raw object" },
-      h("td", null, e.objectKey ? codeInline(e.objectKey) : "—"),
+      h("td", { class: "nowrap" }, e.objectKey ? codeInline(e.objectKey) : "—"),
       h("td", null, e.label ?? "—"),
       h("td", null, e.objectType?.name ?? "—"),
       ...cols.map((c) => h("td", null, cellValue(e, c.id) || "—")),
@@ -296,4 +296,6 @@ void initView("gojira-aql-table", {
   onCancelled: (reason) => mount(h("div", { class: "state" }, `Tool call cancelled${reason ? ` — ${reason}` : ""}.`)),
 }).then((a) => {
   app = a;
+  // Results can land before the handshake resolves; re-render so paging becomes live.
+  if (view) render();
 });

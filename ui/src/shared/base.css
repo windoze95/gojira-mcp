@@ -89,6 +89,15 @@
   --g-accent: #85b8ff;
 }
 
+/*
+ * Once the host tells us its theme (host.ts sets data-theme), pin the UA
+ * color-scheme to match. Our body is transparent so the host's own surface
+ * shows through — without this, a browser whose OS prefers dark paints a dark
+ * UA canvas behind a light-themed widget (and vice versa).
+ */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 * { box-sizing: border-box; }
 
 html, body { margin: 0; padding: 0; background: transparent; }
@@ -112,7 +121,9 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 code, .mono {
   font-family: var(--t-mono);
   font-size: 12px;
-  word-break: break-all;
+  /* Break only when a token genuinely cannot fit — break-all splits short
+     identifiers like tool names mid-word even when the column has room. */
+  overflow-wrap: anywhere;
 }
 code.inline {
   background: var(--t-bg-subtle);
@@ -187,6 +198,10 @@ table.grid thead th {
   position: sticky;
   top: 0;
 }
+/* Identifier columns: keep the token intact and let .table-wrap scroll —
+   `overflow-wrap: anywhere` would also shrink the column's min-content width,
+   so the table starves it and breaks the name mid-token. */
+table.grid th.nowrap, table.grid td.nowrap { white-space: nowrap; max-width: none; overflow-wrap: normal; }
 table.grid tbody tr:last-child td { border-bottom: none; }
 table.grid tbody tr.clickable { cursor: pointer; }
 table.grid tbody tr.clickable:hover { background: var(--t-bg-hover); }

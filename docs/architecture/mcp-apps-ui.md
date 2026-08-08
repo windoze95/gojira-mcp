@@ -22,6 +22,61 @@ hosts. Notably **not** Claude Code — CLI/IDE chat stays text-only.
 | `ui://gojira/aql-table.html` | `assets.aqlSearch` | Results table with dynamic attribute columns (from `objectTypeAttributes`), a column picker, per-page sort, and Prev/Next paging via re-invocation. |
 | `ui://gojira/automation-rule.html` | `automation.listAutomationRules`, `automation.getAutomationRule` | Rule list (cursor paging) and trigger → conditions/branches → actions tree with raw value expanders. |
 
+## What they look like
+
+Captured from the local render harness (`npm run ui:harness`) against fixture
+data — see [Verifying locally](#verifying-locally).
+
+### Confirm card (`ui://gojira/confirm-op.html`)
+
+Dry-run with an RFC 6902 patch table; Commit re-invokes the tool with
+`commit: true`:
+
+![Confirm card for a permission-scheme update](../assets/ui/confirm-permission-scheme.png)
+
+Delete-shaped dry-runs render the before-state and the mode. The message text
+comes from the tool, so `projects.deleteJiraProject` distinguishes trash from
+permanent:
+
+![Confirm card for a permanent project delete, flagged NO UNDO](../assets/ui/confirm-delete-permanent.png)
+
+After committing, and on an error envelope:
+
+![Committed result card showing the journal id](../assets/ui/confirm-committed.png)
+
+![Error card showing code, message and reference id](../assets/ui/confirm-error.png)
+
+### Journal (`ui://gojira/journal.html`)
+
+![Journal timeline](../assets/ui/journal-timeline.png)
+
+Row drill-in fetches the full entry via `gojira.getOperation` and diffs
+before/after locally with the same algorithm as `src/consent/jsonPatch.ts`:
+
+![Expanded journal entry with the applied patch](../assets/ui/journal-detail.png)
+
+Revert previews the reverse patch before anything is applied:
+
+![Revert preview with Confirm revert](../assets/ui/journal-revert-preview.png)
+
+### Assets AQL table (`ui://gojira/aql-table.html`)
+
+![Assets AQL results table](../assets/ui/aql-table.png)
+
+### Automation rules (`ui://gojira/automation-rule.html`)
+
+![Automation rule list](../assets/ui/automation-rule-list.png)
+
+![Automation rule tree](../assets/ui/automation-rule-tree.png)
+
+### Theming
+
+`data-theme` and the host's style variables come from the MCP Apps host
+context; `color-scheme` is pinned to match so the UA canvas behind our
+transparent body follows the host rather than the OS preference:
+
+![Journal timeline in dark theme](../assets/ui/journal-timeline-dark.png)
+
 ## How it's wired
 
 - **Tool linkage** — `src/tools/wrapHandler.ts` adds, per tool:
@@ -78,6 +133,34 @@ Shared plumbing (`ui/src/shared/`):
   belong in a hosted iframe.
 
 ## Verifying locally
+
+### The render harness (no tenant required)
+
+`ui/harness/` is a minimal MCP Apps **host**: it loads a built template into a
+sandboxed iframe and drives the real `AppBridge` postMessage bridge —
+initialize handshake, host theme/style tokens, `tool-input` / `tool-result`
+notifications, and fixture-backed answers to view-initiated `tools/call`. So
+the interactive paths (commit, revert, paging, drill-in) all work with no
+Atlassian tenant, no OAuth, and no Redis.
+
+```bash
+npm run build:ui     # templates → ui/dist
+npm run ui:harness   # → http://localhost:5174/
+```
+
+Scenarios live in `ui/harness/fixtures.ts`; the index page lists them.
+Each is addressable for screenshots:
+`?scenario=<id>&theme=light|dark&chrome=off`.
+
+Two things the harness taught us that are easy to get wrong, and are worth
+preserving if you write another host: the bridge must be connected **before**
+the iframe navigates (the view sends `ui/initialize` on load, and a host that
+attaches late loses that request — the view then still receives notifications
+and renders, but its handshake never completes), and a view whose body is
+transparent needs `color-scheme` pinned to the host theme or the UA paints its
+own light/dark canvas behind it.
+
+### Against a real host
 
 ```bash
 npm run build:ui && npm run dev

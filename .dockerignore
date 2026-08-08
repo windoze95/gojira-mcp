@@ -17,3 +17,7 @@ tests
 docker-compose*.yml
 Dockerfile
 ui/dist
+
+# Dev-only render harness and docs assets (never needed in the image)
+ui/harness
+docs

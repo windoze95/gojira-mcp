@@ -12,6 +12,7 @@
   "scripts": {
     "build": "tsc && node scripts/build-ui.mjs",
     "build:ui": "node scripts/build-ui.mjs",
+    "ui:harness": "node scripts/ui-harness.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
