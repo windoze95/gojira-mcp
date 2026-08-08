@@ -19,8 +19,8 @@ const PROFILES_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../deploy
 /** Documented tool count per profile — update alongside README + env comments.
  * Mid-collapse values; final target 26/26/21/19/12 (plan: CRUD collapse). */
 const EXPECTED_COUNTS: Record<string, number> = {
-  readonly: 48,
-  service: 60,
+  readonly: 41,
+  service: 44,
   platform: 22,
   workspace: 20,
   org: 24,
