@@ -124,7 +124,7 @@ const RULE_DOC = {
 const JOURNAL_ENTRIES = [
   {
     op_id: "1f7c0a3e-5b42-4d9a-8e11-6c2b7f4d9a01",
-    tool: "schemes.updatePermissionScheme",
+    tool: "schemes.managePermission",
     target: { kind: "permission_scheme", id: "10200", name: "Payments Platform: Permission Scheme" },
     completed_at: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
     outcome: "success",
@@ -133,7 +133,7 @@ const JOURNAL_ENTRIES = [
   },
   {
     op_id: "2b8d1c4f-6a73-42e8-9d05-7f3c8e2a1b42",
-    tool: "customfields.setCustomFieldOptions",
+    tool: "customfields.manage",
     target: { kind: "custom_field", id: "customfield_10310", name: "Support Team" },
     completed_at: new Date(Date.now() - 47 * 60 * 1000).toISOString(),
     outcome: "success",
@@ -142,7 +142,7 @@ const JOURNAL_ENTRIES = [
   },
   {
     op_id: "3c9e2d5a-7b84-4f19-ae26-8a4d9f3b2c53",
-    tool: "assets.deleteObject",
+    tool: "assets.delete",
     target: { kind: "asset_object", id: "1042", key: "HW-1042", name: "MBP-14 · dana.okonkwo" },
     completed_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     outcome: "success",
@@ -151,7 +151,7 @@ const JOURNAL_ENTRIES = [
   },
   {
     op_id: "4da13e6b-8c95-4a2b-bf37-9b5eaf4c3d64",
-    tool: "automation.updateAutomationRule",
+    tool: "automation.manageRule",
     target: { kind: "automation_rule", id: "b31f6a24-8d5e-4c17-9f0a-2e6c7d1b4a93", name: "Auto-triage payment failures" },
     completed_at: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
     outcome: "failure",
@@ -160,7 +160,7 @@ const JOURNAL_ENTRIES = [
   },
   {
     op_id: "5eb24f7c-9da6-4b3c-c048-ac6fb05d4e75",
-    tool: "jsm.createRequestType",
+    tool: "jsm.manage",
     target: { kind: "jsm_request_type", id: "217", name: "Corporate card request" },
     completed_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     outcome: "success",
@@ -173,12 +173,12 @@ const JOURNAL_DETAIL: Record<string, unknown> = {
   "1f7c0a3e-5b42-4d9a-8e11-6c2b7f4d9a01": {
     opId: "1f7c0a3e-5b42-4d9a-8e11-6c2b7f4d9a01",
     accountId: "5f2b9c11a4d3e80071a3b6d2",
-    tool: "schemes.updatePermissionScheme",
+    tool: "schemes.managePermission",
     cloudId: "9c1e4f3a-0000-4b1e-a111-8f2d6c5b7a10",
     target: { kind: "permission_scheme", id: "10200", name: "Payments Platform: Permission Scheme" },
     before: PERMISSION_SCHEME_BEFORE,
     after: PERMISSION_SCHEME_AFTER,
-    request: { schemeId: "10200", commit: true },
+    request: { op: "updatePermissionScheme", schemeId: "10200" },
     requestedAt: new Date(Date.now() - 4 * 60 * 1000 - 800).toISOString(),
     completedAt: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
     outcome: "success",
@@ -295,10 +295,10 @@ export const SCENARIOS: Record<string, Scenario> = {
   "confirm-scheme": {
     view: "confirm-op",
     label: "Confirm card — permission scheme (PUT-replace diff)",
-    toolArgs: { schemeId: "10200", permissions: PERMISSION_SCHEME_AFTER.permissions },
+    toolArgs: { op: "updatePermissionScheme", schemeId: "10200", permissions: PERMISSION_SCHEME_AFTER.permissions },
     result: {
       dry_run: true,
-      tool: "schemes.updatePermissionScheme",
+      tool: "schemes.managePermission",
       message:
         "This call REPLACES the scheme's permissions array — grants omitted from your payload are dropped. Re-invoke with `commit: true` to apply the diff below.",
       target: { kind: "permission_scheme", id: "10200", name: "Payments Platform: Permission Scheme" },
@@ -313,7 +313,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       commit_hint: "Re-invoke this tool with the same arguments and `commit: true` to apply.",
     },
     calls: {
-      "schemes.updatePermissionScheme": { ok: true, journal_id: "1f7c0a3e-5b42-4d9a-8e11-6c2b7f4d9a01" },
+      "schemes.managePermission": { ok: true, journal_id: "1f7c0a3e-5b42-4d9a-8e11-6c2b7f4d9a01" },
     },
   },
 
@@ -323,14 +323,14 @@ export const SCENARIOS: Record<string, Scenario> = {
     toolArgs: { project: "PAYX", permanent: true },
     result: {
       dry_run: true,
-      tool: "projects.deleteJiraProject",
+      tool: "projects.delete",
       message: "Would PERMANENTLY DELETE the project. Re-invoke with commit:true to apply. NO UNDO.",
       target: { kind: "jira_project", id: "PAYX", key: "PAYX", name: "Payments Experiments" },
       diff: { before: PROJECT_BEFORE, after: null },
       commit_hint: "Re-invoke this tool with `commit: true` to perform the deletion.",
     },
     calls: {
-      "projects.deleteJiraProject": { ok: true, journal_id: "9f3a1b7c-2d4e-4a6b-8c0d-1e5f7a9b3c2d" },
+      "projects.delete": { ok: true, journal_id: "9f3a1b7c-2d4e-4a6b-8c0d-1e5f7a9b3c2d" },
     },
   },
 
@@ -361,8 +361,11 @@ export const SCENARIOS: Record<string, Scenario> = {
     toolArgs: { limit: 25 },
     result: { count: JOURNAL_ENTRIES.length, entries: JOURNAL_ENTRIES },
     calls: {
-      "gojira.getOperation": (args) => JOURNAL_DETAIL[String(args.op_id)] ?? JOURNAL_DETAIL[JOURNAL_ENTRIES[0].op_id],
-      "gojira.listRecentOperations": { count: JOURNAL_ENTRIES.length, entries: JOURNAL_ENTRIES },
+      // Post-collapse: the journal template calls one tool with an op field.
+      "gojira.readJournal": (args) =>
+        args.op === "getOperation"
+          ? (JOURNAL_DETAIL[String(args.op_id)] ?? JOURNAL_DETAIL[JOURNAL_ENTRIES[0].op_id])
+          : { count: JOURNAL_ENTRIES.length, entries: JOURNAL_ENTRIES },
       "gojira.revertOperation": (args) =>
         args.commit === true
           ? {
@@ -374,7 +377,7 @@ export const SCENARIOS: Record<string, Scenario> = {
           : {
               dry_run: true,
               tool: "gojira.revertOperation",
-              message: `Would revert operation ${String(args.op_id)} (schemes.updatePermissionScheme). Re-invoke with commit:true to apply.`,
+              message: `Would revert operation ${String(args.op_id)} (schemes.managePermission). Re-invoke with commit:true to apply.`,
               target: { kind: "permission_scheme", id: "10200", name: "Payments Platform: Permission Scheme" },
               diff: {
                 patch: [
@@ -385,7 +388,7 @@ export const SCENARIOS: Record<string, Scenario> = {
                 after: PERMISSION_SCHEME_BEFORE,
               },
               commit_hint: "Re-invoke this tool with the same arguments and `commit: true` to apply.",
-              original: { op_id: String(args.op_id), tool: "schemes.updatePermissionScheme" },
+              original: { op_id: String(args.op_id), tool: "schemes.managePermission" },
             },
     },
   },
@@ -422,8 +425,8 @@ export const SCENARIOS: Record<string, Scenario> = {
     toolArgs: { limit: 50 },
     result: RULE_SUMMARIES,
     calls: {
-      "automation.getAutomationRule": RULE_DOC,
-      "automation.listAutomationRules": RULE_SUMMARIES,
+      // Post-collapse: one tool, op-dispatched.
+      "automation.readRule": (args) => (args.op === "getAutomationRule" ? RULE_DOC : RULE_SUMMARIES),
     },
   },
 };
