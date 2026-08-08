@@ -5,12 +5,12 @@ import { makeRedis } from "../helpers/redis.js";
 import type { AppConfig } from "../../src/config.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 
-function buildConfig(): AppConfig {
+function buildConfig(mcpServerUrl = "http://localhost:8081"): AppConfig {
   return {
     nodeEnv: "test",
     logLevel: "fatal",
     mcpPort: 8081,
-    mcpServerUrl: "http://localhost:8081",
+    mcpServerUrl,
     allowedOrigins: ["*"],
     redisUrl: "redis://mock",
     tokenEncryptionKey: randomBytes(32),
@@ -108,5 +108,88 @@ describe("GojiraOAuthProvider — rotating refresh tokens with reuse detection",
     const info = await provider.verifyAccessToken(t.access_token);
     expect(info.extra?.accountId).toBe(accountId);
     expect(info.clientId).toBe(fakeClient.client_id);
+  });
+});
+
+describe("GojiraOAuthProvider — cross-instance issuer isolation (shared Redis)", () => {
+  // Two split-surface profile instances share one Redis; each mints and honors
+  // only its own tokens. See docs/deployment/profiles.md.
+  let redis: ReturnType<typeof makeRedis>;
+  let instanceA: GojiraOAuthProvider;
+  let instanceB: GojiraOAuthProvider;
+  const accountId = "abc123";
+
+  beforeEach(async () => {
+    redis = makeRedis();
+    instanceA = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig("http://gojira.internal:8081"),
+    });
+    instanceB = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig("http://gojira.internal:8082"),
+    });
+    await redis.set(`token:${accountId}`, "encrypted-blob");
+  });
+
+  it("stamps the minting instance's issuer into stored AT and RT records", async () => {
+    const t = await instanceA.mintMcpTokens({ accountId, clientId: fakeClient.client_id });
+    const at = JSON.parse((await redis.get(`mcp_token:${t.access_token}`))!);
+    const rt = JSON.parse((await redis.get(`mcp_refresh:${t.refresh_token!}`))!);
+    expect(at.issuer).toBe("http://gojira.internal:8081");
+    expect(rt.issuer).toBe("http://gojira.internal:8081");
+  });
+
+  it("rejects an access token minted by a sibling instance — without deleting it", async () => {
+    const t = await instanceA.mintMcpTokens({ accountId, clientId: fakeClient.client_id });
+    await expect(instanceB.verifyAccessToken(t.access_token)).rejects.toThrow(
+      /different gojira-mcp instance/,
+    );
+    // Still valid at its own instance: the sibling must not have consumed it.
+    const info = await instanceA.verifyAccessToken(t.access_token);
+    expect(info.extra?.accountId).toBe(accountId);
+  });
+
+  it("rejects a sibling's refresh token WITHOUT consuming it or tripping reuse detection", async () => {
+    const t = await instanceA.mintMcpTokens({ accountId, clientId: fakeClient.client_id });
+    await expect(instanceB.exchangeRefreshToken(fakeClient, t.refresh_token!)).rejects.toThrow(
+      /different gojira-mcp instance/,
+    );
+    // The RT record must survive the rejected exchange…
+    expect(await redis.get(`mcp_refresh:${t.refresh_token!}`)).toBeTruthy();
+    // …and still rotate normally at its own instance (no family revocation).
+    const rotated = await instanceA.exchangeRefreshToken(fakeClient, t.refresh_token!);
+    expect(rotated.refresh_token).not.toBe(t.refresh_token);
+    const info = await instanceA.verifyAccessToken(rotated.access_token);
+    expect(info.extra?.accountId).toBe(accountId);
+  });
+
+  it("grandfathers pre-upgrade tokens that carry no issuer stamp", async () => {
+    // Hand-write records in the pre-issuer format.
+    const legacyAt = "a".repeat(64);
+    const legacyRt = "b".repeat(64);
+    const familyId = "legacy-family";
+    await redis.set(
+      `mcp_token:${legacyAt}`,
+      JSON.stringify({
+        accountId,
+        clientId: fakeClient.client_id,
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        familyId,
+      }),
+    );
+    await redis.set(
+      `mcp_refresh:${legacyRt}`,
+      JSON.stringify({ accountId, clientId: fakeClient.client_id, familyId, generation: 1 }),
+    );
+    await redis.set(`rt_family:${legacyRt}`, familyId);
+
+    const info = await instanceA.verifyAccessToken(legacyAt);
+    expect(info.extra?.accountId).toBe(accountId);
+
+    // Legacy RT exchanges fine, and the replacement pair is issuer-stamped.
+    const minted = await instanceA.exchangeRefreshToken(fakeClient, legacyRt);
+    const newRt = JSON.parse((await redis.get(`mcp_refresh:${minted.refresh_token!}`))!);
+    expect(newRt.issuer).toBe("http://gojira.internal:8081");
   });
 });

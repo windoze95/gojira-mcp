@@ -45,13 +45,14 @@ Returns server liveness, Redis ping, and OAuth issuer URL.
 
 ### `gojira.listEnabledTools`
 
-Lists the tools available to this caller, given the deployment's operator allowlist and org-admin gate.
+Lists the tools available to this caller, given the deployment's operator allowlist and org-admin gate. Pass available_only:true to omit tools this instance does not serve.
 
 - **Group:** `utility`
 - **Auth method:** none
 - **Destructive:** no
 - **Requires cloudId:** no
-- **Input:** _(no parameters)_
+- **Input:**
+  - `available_only`: boolean
 
 ### `gojira.listRecentOperations`
 
