@@ -1,5 +1,6 @@
 import type { JournalEntry } from "./journal.js";
 import { ValidationError } from "../middleware/errorHandler.js";
+import { canonicalReverterKey } from "./legacyAliases.js";
 
 /**
  * A reverter is bound to a (tool, target.kind) pair. It receives the journal
@@ -23,19 +24,40 @@ export type ReverterFn = (entry: JournalEntry, ctx: unknown) => Promise<unknown>
 class ReverterRegistry {
   private readonly reverters = new Map<ReverterId, ReverterFn>();
 
-  register(toolName: string, fn: ReverterFn): void {
-    this.reverters.set(toolName, fn);
+  /**
+   * Keys are bare tool names for single-op tools and `${tool}#${op}` for
+   * op-parameterized tools ('#' cannot occur in either). Idempotent re-register
+   * of the SAME function is a no-op (defs modules re-run their define* calls on
+   * every allTools() invocation); a different function under an existing key is
+   * a wiring bug.
+   */
+  register(key: string, fn: ReverterFn): void {
+    const existing = this.reverters.get(key);
+    if (existing) {
+      if (existing === fn) return;
+      throw new Error(`Reverter already registered for '${key}' with a different function`);
+    }
+    this.reverters.set(key, fn);
   }
 
-  resolve(toolName: string): ReverterFn | null {
-    return this.reverters.get(toolName) ?? null;
+  resolve(key: string): ReverterFn | null {
+    return this.reverters.get(key) ?? null;
   }
 
-  has(toolName: string): boolean {
-    return this.reverters.has(toolName);
+  has(key: string): boolean {
+    return this.reverters.has(key);
   }
 
-  /** Tool names with a registered reverter (used to audit revert coverage). */
+  /** Entry-aware resolution: new entries via request.op, legacy via alias map. */
+  hasForEntry(entry: Pick<JournalEntry, "tool" | "request">): boolean {
+    return this.reverters.has(canonicalReverterKey(entry));
+  }
+
+  resolveForEntry(entry: Pick<JournalEntry, "tool" | "request">): ReverterFn | null {
+    return this.reverters.get(canonicalReverterKey(entry)) ?? null;
+  }
+
+  /** Registered keys (tool names / tool#op) — used to audit revert coverage. */
   names(): string[] {
     return [...this.reverters.keys()];
   }
@@ -57,7 +79,7 @@ export function assertRevertible(entry: JournalEntry): void {
       outcome: entry.outcome,
     });
   }
-  if (!reverters.has(entry.tool)) {
+  if (!reverters.hasForEntry(entry)) {
     throw new ValidationError(
       `No reverter registered for tool '${entry.tool}'. This operation cannot be undone via revertOperation.`,
     );

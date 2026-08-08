@@ -82,6 +82,24 @@ export interface AtlassianClientFactories {
   forms(): AtlassianClient;
 }
 
+/**
+ * One operation of an op-parameterized tool (defineOpTool). Machine-readable
+ * manifest consumed by gen-tool-docs, gojira.listEnabledTools, the runtime
+ * revert-coverage test, and the legacy alias map.
+ */
+export interface OpManifestEntry {
+  op: string;
+  description: string;
+  destructive: boolean;
+  readOnly: boolean;
+  /** Pre-collapse tool name this op absorbs; feeds the legacy alias map. */
+  legacyName?: string;
+  /** The op's own raw input shape with real required-ness (docs + coverage). */
+  inputShape: z.ZodRawShape;
+  /** Whether this op ever journals revertible:true — coverage cross-checks a reverter exists. */
+  claimsRevertible: boolean;
+}
+
 export interface ToolDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O = unknown> {
   name: string;
   description: string;
@@ -91,6 +109,13 @@ export interface ToolDefinition<I extends z.ZodTypeAny = z.ZodTypeAny, O = unkno
   destructive: boolean;
   /** Required cloudId binding; false for tools that don't address a Jira/Confluence tenant. */
   needsCloudId: boolean;
+  /**
+   * Explicit read-only marker for MCP annotations; wins over the leaf-verb
+   * regex fallback in wrapHandler. Set on every collapsed read tool.
+   */
+  readOnly?: boolean;
+  /** Op manifest — present only on op-parameterized tools built by defineOpTool. */
+  ops?: ReadonlyArray<OpManifestEntry>;
   /**
    * MCP Apps (SEP-1865) template this tool renders with in UI-capable hosts.
    * Optional — destructive tools fall back to the confirm-op card (see

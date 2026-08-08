@@ -185,6 +185,7 @@ export const utilityTools = (): AnyToolDef[] => [
         group: string;
         auth_method: string;
         destructive: boolean;
+        ops?: string[];
         available: boolean;
         reason?: string;
       }> = [];
@@ -207,6 +208,7 @@ export const utilityTools = (): AnyToolDef[] => [
           group: t.group,
           auth_method: t.authMethod,
           destructive: t.destructive,
+          ...(t.ops && t.ops.length > 0 ? { ops: t.ops.map((o) => o.op) } : {}),
           available,
           ...(reason ? { reason } : {}),
         });
@@ -312,9 +314,12 @@ export const utilityTools = (): AnyToolDef[] => [
       // re-run another instance's write surface through its journal entries.
       // Applies to the dry-run branch too: the dry run reveals before/after
       // state the caller's surface never exposed. Fails closed when the
-      // original tool no longer resolves to a def.
+      // original tool no longer resolves to a def. Pre-collapse entries (30d
+      // TTL) resolve through the legacy alias map; unknown names do not.
       const { allTools } = await import("./index.js");
-      const originalDef = allTools().find((t) => t.name === entry.tool);
+      const { canonicalToolName } = await import("../../operations/legacyAliases.js");
+      const canonicalName = canonicalToolName(entry);
+      const originalDef = allTools().find((t) => t.name === canonicalName);
       if (!originalDef || !ctx.config.enabledGroups.includes(originalDef.group)) {
         const owner = entry.instance
           ? ` The operation was journaled by instance '${entry.instance}'; connect to that instance to revert it.`
@@ -341,7 +346,7 @@ export const utilityTools = (): AnyToolDef[] => [
         })!;
         return { ...dry, original: { op_id: entry.opId, tool: entry.tool } };
       }
-      const reverter = reverters.resolve(entry.tool);
+      const reverter = reverters.resolveForEntry(entry);
       if (!reverter) {
         throw new ValidationError(`No reverter registered for tool '${entry.tool}'.`);
       }

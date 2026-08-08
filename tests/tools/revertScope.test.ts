@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { allTools } from "../../src/tools/defs/index.js";
 import { reverters } from "../../src/operations/revert.js";
+import { registerLegacyAlias } from "../../src/operations/legacyAliases.js";
 import type { ToolContext } from "../../src/tools/types.js";
 import type { JournalEntry } from "../../src/operations/journal.js";
 
@@ -101,5 +102,27 @@ describe("gojira.revertOperation — original-tool group gate", () => {
     await expect(revertDef.handler({ op_id: entry.opId }, ctx)).rejects.toThrow(
       /Cannot resolve the original tool 'ghost\.renamedTool'/,
     );
+  });
+
+  it("reverts pre-collapse journal entries through the legacy alias map", async () => {
+    // Simulate a post-collapse deployment: the OLD tool name lives only in a
+    // 30-day-old journal entry; the alias maps it onto a live tool + op-keyed
+    // reverter. The whole chain — assertRevertible, the group gate, and the
+    // dry-run — must resolve through the alias.
+    const liveTool = tools.find((t) => t.name === revertibleTool)!;
+    registerLegacyAlias("legacy.preCollapseTool", { tool: liveTool.name, op: "legacyOp" });
+    reverters.register(`${liveTool.name}#legacyOp`, async () => ({ restored: true }));
+
+    const entry = makeEntry({ tool: "legacy.preCollapseTool" });
+    // Wrong surface still refuses — the gate canonicalizes to the live tool's group.
+    const denied = makeCtx(["utility"], entry);
+    await expect(revertDef.handler({ op_id: entry.opId }, denied)).rejects.toThrow(
+      new RegExp(`requires group '${liveTool.group}'`),
+    );
+    // Owning surface passes the gate and renders the dry-run diff.
+    const ctx = makeCtx(["utility", liveTool.group], entry);
+    const result = (await revertDef.handler({ op_id: entry.opId }, ctx)) as Record<string, unknown>;
+    expect(result.dry_run).toBe(true);
+    expect(result.original).toEqual({ op_id: entry.opId, tool: "legacy.preCollapseTool" });
   });
 });

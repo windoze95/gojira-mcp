@@ -40,18 +40,28 @@ export const OUTPUT_ENVELOPE_SHAPE = {
 };
 
 /**
- * Leaf-verb classification for readOnlyHint. Deliberately conservative: only
- * verbs that are pure reads in this catalog qualify (aql → aqlSearch). Verbs
- * with side effects or ambiguity (export, validate, start, bind…) stay
- * unannotated so hosts fall back to their confirm-by-default write handling.
+ * Leaf-verb classification for readOnlyHint — the FALLBACK for defs that don't
+ * set the explicit `readOnly` flag. Deliberately conservative: only verbs that
+ * are pure reads in this catalog qualify (aql → aqlSearch; read → the
+ * collapsed .read* tools). Verbs with side effects or ambiguity (export,
+ * validate, start, bind…) stay unannotated so hosts fall back to their
+ * confirm-by-default write handling.
  */
-const READ_ONLY_LEAF_RE = /^(?:get|list|search|query|aql|health|whoami)/;
+const READ_ONLY_LEAF_RE = /^(?:get|list|search|query|aql|health|whoami|read)/;
 
 function deriveAnnotations(def: ToolDefinition<z.ZodTypeAny, unknown>): ToolAnnotations | undefined {
   // openWorldHint: false throughout — every tool targets the deployment's own
   // Atlassian tenant (a closed domain), not an open set of external entities.
   if (def.destructive) {
     return { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+  }
+  // Explicit flag wins (set by defineOpTool on collapsed read tools and
+  // available to any def); the leaf-verb regex remains the legacy fallback.
+  if (def.readOnly === true) {
+    return { readOnlyHint: true, openWorldHint: false };
+  }
+  if (def.readOnly === false) {
+    return undefined;
   }
   const leaf = def.name.split(".").pop() ?? def.name;
   if (READ_ONLY_LEAF_RE.test(leaf)) {

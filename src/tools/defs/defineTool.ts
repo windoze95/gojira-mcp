@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolContext, ToolDefinition, AuthMethod, PermissionGroup } from "../types.js";
+import { registerLegacyAlias } from "../../operations/legacyAliases.js";
 
 export interface DefineToolArgs<Shape extends z.ZodRawShape, Output> {
   name: string;
@@ -8,6 +9,13 @@ export interface DefineToolArgs<Shape extends z.ZodRawShape, Output> {
   authMethod: AuthMethod;
   destructive?: boolean;
   needsCloudId?: boolean;
+  /** Explicit read-only marker for annotations; wins over the leaf-verb regex. */
+  readOnly?: boolean;
+  /**
+   * Pre-collapse name of this tool when it is a 1:1 RENAME (no op field).
+   * Registers a legacy alias so pre-rename journal entries stay revertible.
+   */
+  legacyName?: string;
   /** MCP Apps template for UI-capable hosts; see ToolDefinition.ui. */
   ui?: { resourceUri: string };
   input?: Shape;
@@ -35,10 +43,16 @@ export function defineTool<Shape extends z.ZodRawShape, Output>(
     authMethod: args.authMethod,
     destructive: args.destructive ?? false,
     needsCloudId: args.needsCloudId ?? false,
+    ...(args.readOnly !== undefined ? { readOnly: args.readOnly } : {}),
     ...(args.ui ? { ui: args.ui } : {}),
     inputSchema,
     handler: args.handler,
   };
+  if (args.legacyName) {
+    // op:null — the renamed tool has no op field; its reverter (if any) stays
+    // keyed by the bare new name. Idempotent across repeated allTools() calls.
+    registerLegacyAlias(args.legacyName, { tool: args.name, op: null });
+  }
   // Variance-safe widening: callers store these in a homogeneous array.
   return def as unknown as AnyToolDef;
 }
