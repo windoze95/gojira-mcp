@@ -55,18 +55,24 @@ describe.skipIf(noCreds)("e2e: revertOperation", () => {
     // revertible:true with nothing registered. Prove one end-to-end on a live
     // tenant — a rename, then an undo that restores the original name.
     const key = `GJRV${Date.now().toString(36).toUpperCase()}`;
-    await h.call("confluence.createConfluenceSpace", { key, name: "gojira-revert-orig", commit: true });
+    await h.call("confluence.manageSpace", {
+      op: "createConfluenceSpace",
+      spaceKey: key,
+      name: "gojira-revert-orig",
+      commit: true,
+    });
     try {
-      const updated = await h.call<{ ok: boolean; journal_id: string }>("confluence.updateConfluenceSpace", {
+      const updated = await h.call<{ ok: boolean; journal_id: string }>("confluence.manageSpace", {
+        op: "updateConfluenceSpace",
         spaceKey: key,
         name: "gojira-revert-CHANGED",
         commit: true,
       });
 
-      const spaces = await h.call<{ results: Array<{ key: string; name: string }> }>(
-        "confluence.listConfluenceSpaces",
-        { limit: 250 },
-      );
+      const spaces = await h.call<{ results: Array<{ key: string; name: string }> }>("confluence.readSpace", {
+        op: "listConfluenceSpaces",
+        limit: 250,
+      });
       expect(spaces.results.find((s) => s.key === key)?.name).toBe("gojira-revert-CHANGED");
 
       const reverted = await h.call<{ reverted: boolean }>("gojira.revertOperation", {
@@ -75,13 +81,13 @@ describe.skipIf(noCreds)("e2e: revertOperation", () => {
       });
       expect(reverted.reverted).toBe(true);
 
-      const after = await h.call<{ results: Array<{ key: string; name: string }> }>(
-        "confluence.listConfluenceSpaces",
-        { limit: 250 },
-      );
+      const after = await h.call<{ results: Array<{ key: string; name: string }> }>("confluence.readSpace", {
+        op: "listConfluenceSpaces",
+        limit: 250,
+      });
       expect(after.results.find((s) => s.key === key)?.name).toBe("gojira-revert-orig");
     } finally {
-      await h.callRaw("confluence.deleteConfluenceSpace", { spaceKey: key, commit: true });
+      await h.callRaw("confluence.delete", { spaceKey: key, commit: true });
     }
   });
 

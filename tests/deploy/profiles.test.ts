@@ -16,12 +16,13 @@ import { ALL_PERMISSION_GROUPS } from "../../src/tools/permissionGroups.js";
 
 const PROFILES_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../deploy/profiles");
 
-/** Documented tool count per profile — update alongside README + env comments. */
+/** Documented tool count per profile — update alongside README + env comments.
+ * Mid-collapse values; final target 26/26/21/19/12 (plan: CRUD collapse). */
 const EXPECTED_COUNTS: Record<string, number> = {
-  readonly: 80,
+  readonly: 50,
   service: 65,
-  platform: 51,
-  workspace: 35,
+  platform: 22,
+  workspace: 20,
   org: 24,
 };
 

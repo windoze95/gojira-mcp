@@ -64,7 +64,7 @@ describe("MCP Apps resources + tool metadata (end-to-end over a real session)", 
     const byName = new Map(tools.map((t) => [t.name, t]));
 
     // Destructive default → confirm card; explicit def.ui → its own template.
-    const del = byName.get("projects.deleteJiraProject")!;
+    const del = byName.get("projects.delete")!;
     expect(del._meta?.ui).toEqual({ resourceUri: CONFIRM_OP_UI_URI });
     expect(del._meta?.["ui/resourceUri"]).toBe(CONFIRM_OP_UI_URI);
     expect(del.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });

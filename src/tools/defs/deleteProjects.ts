@@ -7,10 +7,12 @@ import { reverters } from "../../operations/revert.js";
 /**
  * Isolated permission group `delete_projects` — separate from
  * `write_projects` so disabling deletion doesn't disable archive/restore.
+ * Renamed to the collapse's `.delete` pattern; input is byte-identical to
+ * the pre-collapse projects.deleteJiraProject.
  */
 export const deleteProjectTools = (): AnyToolDef[] => [
   defineTool({
-    name: "projects.deleteJiraProject",
+    name: "projects.delete",
     description:
       "Delete a Jira project. Defaults to move-to-trash (recoverable for ~60 days); pass `permanent: true` " +
       "to hard-delete with no undo. **Re-invoke with `commit: true` after reviewing the dry-run.**",
@@ -18,6 +20,7 @@ export const deleteProjectTools = (): AnyToolDef[] => [
     authMethod: "oauth",
     needsCloudId: true,
     destructive: true,
+    legacyName: "projects.deleteJiraProject",
     input: {
       project: z.string().min(1).describe("Project key or numeric id."),
       permanent: z
@@ -38,7 +41,7 @@ export const deleteProjectTools = (): AnyToolDef[] => [
       const before = await c.get<unknown>(`/rest/api/3/project/${encodeURIComponent(input.project)}`);
       if (input.commit !== true) {
         return buildDeleteDryRun({
-          tool: "projects.deleteJiraProject",
+          tool: "projects.delete",
           target: { kind: "jira_project", id: input.project },
           before: before.data,
           message: permanent
@@ -47,9 +50,7 @@ export const deleteProjectTools = (): AnyToolDef[] => [
         });
       }
       const entry = await ctx.journalOp({
-        accountId: ctx.accountId,
-        tool: "projects.deleteJiraProject",
-        cloudId: ctx.cloudId,
+        ...ctx.defaultJournalArgs,
         target: { kind: "jira_project", id: input.project },
         before: before.data,
         request: { project: input.project, permanent } as Record<string, unknown>,
@@ -72,7 +73,9 @@ export const deleteProjectTools = (): AnyToolDef[] => [
 // (permanent:false => enableUndo=true) is restorable, so the delete mode is
 // journaled in `request.permanent` and re-checked here: a permanent hard-delete
 // is never revertible and must fail loudly rather than 404 against /restore.
-reverters.register("projects.deleteJiraProject", async (entry, anyCtx) => {
+// Registered under the bare collapsed name; pre-collapse entries resolve to it
+// through the legacy alias.
+reverters.register("projects.delete", async (entry, anyCtx) => {
   const ctx = anyCtx as import("../types.js").ToolContext;
   const req = entry.request as { project?: string; permanent?: boolean } | null;
   if (req?.permanent === true) {
