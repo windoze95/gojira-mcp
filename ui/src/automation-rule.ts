@@ -146,8 +146,9 @@ async function loadMore(btn: HTMLButtonElement): Promise<void> {
   loadingMore = true;
   btn.disabled = true;
   try {
+    // Post-collapse tool name; the spread carries the original `op` field.
     const args: Record<string, unknown> = { ...(lastArgs ?? {}), cursor: listCursor };
-    const parsed = await callTool(app, "automation.listAutomationRules", args);
+    const parsed = await callTool(app, "automation.readRule", args);
     if (!parsed.isError && isRecord(parsed.result)) {
       const values = Array.isArray(parsed.result.values) ? parsed.result.values : [];
       listRows = [...listRows, ...values.filter(isRecord)];
@@ -163,7 +164,8 @@ async function openRule(ruleId: string): Promise<void> {
   if (!app) return;
   mount(renderLoading(`Loading rule ${ruleId}…`));
   try {
-    const parsed = await callTool(app, "automation.getAutomationRule", { ruleId });
+    // Fresh-args site: the op discriminator must be explicit here.
+    const parsed = await callTool(app, "automation.readRule", { op: "getAutomationRule", ruleId });
     if (parsed.isError) {
       mount(backButton(), renderErrorCard(parsed.envelope));
       return;

@@ -152,12 +152,12 @@ describe("split-surface instances sharing one Redis", () => {
     await platform.journal.complete(opId, { ...args, after: { id: "10001" }, outcome: "success" });
 
     // Visible from the readonly instance (shared journal is a feature)…
-    const listed = await call(readonly, "gojira.listRecentOperations", {});
+    const listed = await call(readonly, "gojira.readJournal", { op: "listRecentOperations" });
     const entries = (listed.envelope.result as { entries: Array<{ op_id: string }> }).entries;
     expect(entries.map((e) => e.op_id)).toContain(opId);
 
     // …with the owning instance stamped on the entry.
-    const got = await call(readonly, "gojira.getOperation", { op_id: opId });
+    const got = await call(readonly, "gojira.readJournal", { op: "getOperation", op_id: opId });
     expect((got.envelope.result as { instance: string }).instance).toBe("gojira-platform");
 
     // But the readonly instance may not execute (or even dry-run) the revert.

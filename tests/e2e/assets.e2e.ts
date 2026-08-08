@@ -28,8 +28,8 @@ describe.skipIf(!enabled)("e2e: Assets / CMDB (Premium)", () => {
   beforeAll(async () => {
     h = buildHarness();
     const schemas = await h.call<{ values?: Array<{ id: string }> } | Array<{ id: string }>>(
-      "assets.listObjectSchemas",
-      {},
+      "assets.readSchema",
+      { op: "listObjectSchemas" },
     );
     const list = Array.isArray(schemas) ? schemas : (schemas.values ?? []);
     schemaId = list[0]?.id;
@@ -37,7 +37,7 @@ describe.skipIf(!enabled)("e2e: Assets / CMDB (Premium)", () => {
 
   it("lists schemas and reads object types (workspace discovery + read plane)", async () => {
     expect(schemaId, "the Premium tenant should have at least one object schema").toBeTruthy();
-    const types = await h.call("assets.listObjectTypes", { schemaId });
+    const types = await h.call("assets.readSchema", { op: "listObjectTypes", schemaId });
     expect(types).toBeTruthy();
   });
 
@@ -54,7 +54,8 @@ describe.skipIf(!enabled)("e2e: Assets / CMDB (Premium)", () => {
       { objectTypeAttributeId: nameAttrId, objectAttributeValues: [{ value: name }] },
     ];
 
-    const created = await h.call<{ ok: boolean; object?: { id?: string } }>("assets.createObject", {
+    const created = await h.call<{ ok: boolean; object?: { id?: string } }>("assets.manageObject", {
+      op: "createObject",
       objectTypeId,
       attributes: attr("gojira-e2e-probe"),
       commit: true,
@@ -64,17 +65,18 @@ describe.skipIf(!enabled)("e2e: Assets / CMDB (Premium)", () => {
       expect(created.ok).toBe(true);
       expect(objectId).toBeTruthy();
 
-      const got = await h.call<{ id: string }>("assets.getObject", { objectId });
+      const got = await h.call<{ id: string }>("assets.readObject", { op: "getObject", objectId });
       expect(got.id).toBe(objectId);
 
-      const updated = await h.call<{ ok: boolean }>("assets.updateObject", {
+      const updated = await h.call<{ ok: boolean }>("assets.manageObject", {
+        op: "updateObject",
         objectId,
         attributes: attr("gojira-e2e-probe-v2"),
         commit: true,
       });
       expect(updated.ok).toBe(true);
     } finally {
-      if (objectId) await h.callRaw("assets.deleteObject", { objectId, commit: true });
+      if (objectId) await h.callRaw("assets.delete", { op: "deleteObject", objectId, commit: true });
     }
   });
 });

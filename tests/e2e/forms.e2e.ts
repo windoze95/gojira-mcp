@@ -18,7 +18,7 @@ describe.skipIf(noCreds)("e2e: Forms", () => {
   let projectKey: string;
   beforeAll(async () => {
     h = buildHarness();
-    const desks = await h.call<{ values: Array<{ projectKey: string }> }>("jsm.listServiceDesks", {});
+    const desks = await h.call<{ values: Array<{ projectKey: string }> }>("jsm.readServiceDesk", { op: "listServiceDesks" });
     projectKey = desks.values[0].projectKey;
   });
 
@@ -30,16 +30,18 @@ describe.skipIf(noCreds)("e2e: Forms", () => {
     const formId = created.form.id;
     expect(formId).toBeTruthy();
 
-    const listed = await h.call<Array<{ id: string }>>("forms.listFormTemplates", { projectIdOrKey: projectKey });
+    const listed = await h.call<Array<{ id: string }>>("forms.read", { op: "listFormTemplates", projectIdOrKey: projectKey });
     expect(listed.some((f) => f.id === formId)).toBe(true);
 
-    const exported = await h.call<{ id: string; design: unknown }>("forms.getFormTemplate", {
+    const exported = await h.call<{ id: string; design: unknown }>("forms.read", {
+      op: "getFormTemplate",
       projectIdOrKey: projectKey,
       formId,
     });
     expect(exported.design).toBeTruthy();
 
-    const updated = await h.call<{ ok: boolean }>("forms.updateFormTemplate", {
+    const updated = await h.call<{ ok: boolean }>("forms.manageTemplate", {
+      op: "updateFormTemplate",
       projectIdOrKey: projectKey,
       formId,
       form: { ...DESIGN, name: "gojira-e2e-form-v2" },
@@ -47,30 +49,32 @@ describe.skipIf(noCreds)("e2e: Forms", () => {
     });
     expect(updated.ok).toBe(true);
 
-    const del = await h.call<{ ok: boolean }>("forms.deleteFormTemplate", {
+    const del = await h.call<{ ok: boolean }>("forms.delete", {
       projectIdOrKey: projectKey,
       formId,
       commit: true,
     });
     expect(del.ok).toBe(true);
 
-    const after = await h.call<Array<{ id: string }>>("forms.listFormTemplates", { projectIdOrKey: projectKey });
+    const after = await h.call<Array<{ id: string }>>("forms.read", { op: "listFormTemplates", projectIdOrKey: projectKey });
     expect(after.some((f) => f.id === formId)).toBe(false);
   });
 
   it("issue form reads answer without error", async () => {
-    const desks = await h.call<{ values: Array<{ id: string }> }>("jsm.listServiceDesks", {});
-    const queues = await h.call<{ values: Array<{ id: string }> }>("jsm.listQueues", {
+    const desks = await h.call<{ values: Array<{ id: string }> }>("jsm.readServiceDesk", { op: "listServiceDesks" });
+    const queues = await h.call<{ values: Array<{ id: string }> }>("jsm.readSupport", {
+      op: "listQueues",
       serviceDeskId: desks.values[0].id,
     });
     // Reading forms on any issue in the first queue (or skip silently when empty).
-    const issues = await h.call<{ values: Array<{ key: string }> }>("jsm.getQueueIssues", {
+    const issues = await h.call<{ values: Array<{ key: string }> }>("jsm.readSupport", {
+      op: "getQueueIssues",
       serviceDeskId: desks.values[0].id,
       queueId: queues.values[0]?.id,
       limit: 1,
     });
     if (issues.values?.length) {
-      const forms = await h.call<unknown[]>("forms.listIssueForms", { issueIdOrKey: issues.values[0].key });
+      const forms = await h.call<unknown[]>("forms.read", { op: "listIssueForms", issueIdOrKey: issues.values[0].key });
       expect(Array.isArray(forms)).toBe(true);
     }
   });

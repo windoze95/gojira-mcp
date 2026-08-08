@@ -167,7 +167,9 @@ async function refresh(btn: HTMLButtonElement): Promise<void> {
   if (!app) return;
   btn.disabled = true;
   try {
-    renderParsed(await callTool(app, "gojira.listRecentOperations", lastArgs ?? {}));
+    // Post-collapse tool name; spreading lastArgs carries the original op field,
+    // and a fresh render (no lastArgs) sets it explicitly.
+    renderParsed(await callTool(app, "gojira.readJournal", { op: "listRecentOperations", ...(lastArgs ?? {}) }));
   } catch {
     btn.disabled = false;
   }
@@ -185,7 +187,7 @@ async function toggleDetail(e: EntryDetail, row: HTMLTableRowElement, detailRow:
     cell.replaceChildren(renderLoading("Loading entry…"));
     if (!app) return;
     try {
-      const parsed = await callTool(app, "gojira.getOperation", { op_id: e.opId });
+      const parsed = await callTool(app, "gojira.readJournal", { op: "getOperation", op_id: e.opId });
       if (parsed.isError || !isRecord(parsed.result)) {
         cell.replaceChildren(renderErrorCard(parsed.envelope));
         return;
