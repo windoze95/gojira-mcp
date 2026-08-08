@@ -35,6 +35,12 @@ function claimedRevertibleTools(): Array<{ tool: string; value: string; file: st
   const claims: Array<{ tool: string; value: string; file: string }> = [];
   for (const file of readdirSync(DEFS_DIR).filter((f) => f.endsWith(".ts"))) {
     const src = readFileSync(join(DEFS_DIR, file), "utf8");
+    // Converted modules (defineOpTool) stop writing `tool:` literals in
+    // handlers, which breaks the nearest-preceding pairing below. Their
+    // coverage is enforced manifest-driven by opRevertCoverage.test.ts; this
+    // walker's scope shrinks module-by-module and the file dies with the last
+    // conversion.
+    if (src.includes("defineOpTool(")) continue;
     const revertibleRe = /revertible:\s*([A-Za-z_][\w.]*)/g;
     let m: RegExpExecArray | null;
     while ((m = revertibleRe.exec(src))) {
@@ -55,7 +61,10 @@ function claimedRevertibleTools(): Array<{ tool: string; value: string; file: st
 describe("revert coverage", () => {
   it("every tool that journals revertible has a registered reverter", () => {
     const claims = claimedRevertibleTools();
-    expect(claims.length).toBeGreaterThan(0); // the scan itself must be working
+    // Vacuously green once every module is converted to defineOpTool (the
+    // walker skips converted files); this file is deleted at that point and
+    // opRevertCoverage.test.ts is the sole enforcement.
+    if (claims.length === 0) return;
 
     const unbacked = claims
       .filter((c) => !reverters.has(c.tool))
@@ -66,11 +75,13 @@ describe("revert coverage", () => {
     );
   });
 
-  it("every registered reverter names a tool that actually exists", () => {
+  it("every bare-name reverter names a tool that actually exists", () => {
     // A reverter keyed by a typo'd or removed tool name would silently never
     // fire, and the tool it was meant to protect would be unrevertable.
+    // `tool#op` keys (op-parameterized tools) are validated manifest-driven in
+    // opRevertCoverage.test.ts.
     const toolNames = new Set(allTools().map((t) => t.name));
-    const registered = reverters.names();
+    const registered = reverters.names().filter((name) => !name.includes("#"));
     expect(registered.length).toBeGreaterThan(0);
 
     const dead = registered.filter((name) => !toolNames.has(name));

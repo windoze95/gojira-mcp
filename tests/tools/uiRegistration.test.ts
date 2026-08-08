@@ -95,6 +95,44 @@ describe("registerWrappedTool — MCP metadata", () => {
     expect(config.annotations).toBeUndefined();
   });
 
+  it("explicit readOnly:true wins over a non-read leaf verb", () => {
+    const def = defineTool({
+      name: "test.exportThing", // 'export' misses the leaf regex
+      description: "read via explicit flag",
+      group: "utility",
+      authMethod: "none",
+      readOnly: true,
+      handler: async () => ({ ok: true }),
+    });
+    const { config } = capture(def);
+    expect(config.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+  });
+
+  it("explicit readOnly:false suppresses the leaf-verb inference", () => {
+    const def = defineTool({
+      name: "test.listButActuallyMutates",
+      description: "misleading leaf verb, corrected by the flag",
+      group: "utility",
+      authMethod: "none",
+      readOnly: false,
+      handler: async () => ({ ok: true }),
+    });
+    const { config } = capture(def);
+    expect(config.annotations).toBeUndefined();
+  });
+
+  it("collapsed read-leaf verbs annotate read-only via the regex fallback", () => {
+    const def = defineTool({
+      name: "test.readThings", // the collapse's `.read*` leaf pattern
+      description: "read",
+      group: "utility",
+      authMethod: "none",
+      handler: async () => ({ items: [] }),
+    });
+    const { config } = capture(def);
+    expect(config.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+  });
+
   it("declares the output envelope schema on every tool", () => {
     for (const def of [destructiveDef, readDef, writeDef]) {
       const { config } = capture(def);
