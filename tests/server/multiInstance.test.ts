@@ -114,10 +114,10 @@ describe("split-surface instances sharing one Redis", () => {
   });
 
   it("registers disjoint surfaces apart from the shared utility group", () => {
-    expect(readonly.tools.has("schemes.listPermissionSchemes")).toBe(true);
-    expect(readonly.tools.has("schemes.createPermissionScheme")).toBe(false);
-    expect(platform.tools.has("schemes.createPermissionScheme")).toBe(true);
-    expect(platform.tools.has("schemes.listPermissionSchemes")).toBe(false);
+    expect(readonly.tools.has("schemes.readAccess")).toBe(true);
+    expect(readonly.tools.has("schemes.managePermission")).toBe(false);
+    expect(platform.tools.has("schemes.managePermission")).toBe(true);
+    expect(platform.tools.has("schemes.readAccess")).toBe(false);
     for (const inst of [readonly, platform]) {
       expect(inst.tools.has("gojira.health")).toBe(true);
       expect(inst.tools.has("gojira.revertOperation")).toBe(true);
@@ -135,7 +135,10 @@ describe("split-surface instances sharing one Redis", () => {
   });
 
   it("shares the journal for reading but gates reverts on the owning group", async () => {
-    // The platform instance journals a successful, revertible write.
+    // The platform instance journals a successful, revertible write — under
+    // the PRE-COLLAPSE tool name, deliberately: this doubles as the live
+    // cross-instance test of the legacy alias path (old entries must keep
+    // resolving through schemes.managePermission#createPermissionScheme).
     const args = {
       accountId: ACCOUNT_ID,
       tool: "schemes.createPermissionScheme",
