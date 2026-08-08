@@ -13,37 +13,47 @@ describe.skipIf(noCreds)("e2e: Confluence admin", () => {
   });
 
   it("space lifecycle: create → get → update → permissions → delete", async () => {
-    const created = await h.call<{ ok: boolean; space: { id: string | number } }>(
-      "confluence.createConfluenceSpace",
-      { key: KEY, name: "gojira-e2e-space", commit: true },
-    );
+    const created = await h.call<{ ok: boolean; space: { id: string | number } }>("confluence.manageSpace", {
+      op: "createConfluenceSpace",
+      spaceKey: KEY,
+      name: "gojira-e2e-space",
+      commit: true,
+    });
     expect(created.ok).toBe(true);
 
-    const spaces = await h.call<{ results: Array<{ id: string; name: string }> }>("confluence.listConfluenceSpaces", {
+    const spaces = await h.call<{ results: Array<{ id: string; name: string }> }>("confluence.readSpace", {
+      op: "listConfluenceSpaces",
       limit: 100,
     });
     const found = spaces.results.find((s) => s.name === "gojira-e2e-space");
     expect(found).toBeDefined();
 
-    const one = await h.call<{ id: string }>("confluence.getConfluenceSpace", { spaceId: found!.id });
+    const one = await h.call<{ id: string }>("confluence.readSpace", {
+      op: "getConfluenceSpace",
+      spaceId: found!.id,
+    });
     expect(one.id).toBe(found!.id);
 
-    const up = await h.call<{ ok: boolean }>("confluence.updateConfluenceSpace", {
+    const up = await h.call<{ ok: boolean }>("confluence.manageSpace", {
+      op: "updateConfluenceSpace",
       spaceKey: KEY,
       name: "gojira-e2e-space-v2",
       commit: true,
     });
     expect(up.ok).toBe(true);
 
-    const perms = await h.call<{ results: unknown[] }>("confluence.listSpacePermissions", { spaceId: found!.id });
+    const perms = await h.call<{ results: unknown[] }>("confluence.readSpace", {
+      op: "listSpacePermissions",
+      spaceId: found!.id,
+    });
     expect(perms.results.length).toBeGreaterThan(0);
 
-    const del = await h.call<{ ok: boolean }>("confluence.deleteConfluenceSpace", { spaceKey: KEY, commit: true });
+    const del = await h.call<{ ok: boolean }>("confluence.delete", { spaceKey: KEY, commit: true });
     expect(del.ok).toBe(true);
   });
 
   it("templates + blueprints read", async () => {
-    await h.call("confluence.listTemplates", {});
-    await h.call("confluence.listBlueprints", {});
+    await h.call("confluence.readContent", { op: "listTemplates" });
+    await h.call("confluence.readContent", { op: "listBlueprints" });
   });
 });
