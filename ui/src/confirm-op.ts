@@ -18,6 +18,7 @@ import {
 const root = document.getElementById("app")!;
 let app: App | null = null;
 let lastArgs: Record<string, unknown> | null = null;
+let lastParsed: ParsedResult | null = null;
 
 function mount(...nodes: Array<HTMLElement | null>): void {
   clear(root);
@@ -26,6 +27,7 @@ function mount(...nodes: Array<HTMLElement | null>): void {
 }
 
 function renderParsed(parsed: ParsedResult): void {
+  lastParsed = parsed;
   if (parsed.isError) {
     mount(renderErrorCard(parsed.envelope));
     return;
@@ -59,7 +61,10 @@ function renderDryRunCard(dry: DryRunPayload): void {
   card.append(renderDiff(dry.diff));
 
   const actions = h("div", { class: "actions" });
-  const canCommit = Boolean(dry.tool && lastArgs);
+  // Gate on `app` too: a result can arrive before the ui/initialize handshake
+  // resolves, and committing needs a live bridge. The view re-renders once
+  // initView resolves, so the button enables on its own.
+  const canCommit = Boolean(dry.tool && lastArgs && app);
   const btn = h(
     "button",
     { class: "btn danger", type: "button", disabled: !canCommit || null },
@@ -70,7 +75,9 @@ function renderDryRunCard(dry: DryRunPayload): void {
     { class: "hint" },
     canCommit
       ? (dry.commit_hint ?? "Nothing changes until you commit.")
-      : "Original call context unavailable — ask in chat to re-invoke with commit: true.",
+      : !app
+        ? "Connecting to the host…"
+        : "Original call context unavailable — ask in chat to re-invoke with commit: true.",
   );
   btn.addEventListener("click", () => void commit(dry, btn));
   actions.append(btn, hint);
@@ -114,4 +121,7 @@ void initView("gojira-confirm-op", {
     mount(h("div", { class: "state" }, `Tool call cancelled${reason ? ` — ${reason}` : ""}.`)),
 }).then((a) => {
   app = a;
+  // Results can land before the handshake resolves; re-render so actions that
+  // need the bridge become live.
+  if (lastParsed) renderParsed(lastParsed);
 });

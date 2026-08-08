@@ -39,6 +39,7 @@ interface EntryDetail extends EntrySummary {
 const root = document.getElementById("app")!;
 let app: App | null = null;
 let lastArgs: Record<string, unknown> | null = null;
+let lastParsed: ParsedResult | null = null;
 
 function mount(...nodes: Array<HTMLElement | null>): void {
   clear(root);
@@ -83,6 +84,7 @@ function targetSummary(target: EntrySummary["target"]): string {
 }
 
 function renderParsed(parsed: ParsedResult): void {
+  lastParsed = parsed;
   if (parsed.isError) {
     mount(renderErrorCard(parsed.envelope));
     return;
@@ -125,7 +127,7 @@ function renderList(entries: EntryDetail[], count: number): void {
       "tr",
       { class: "clickable", title: "Show detail" },
       h("td", null, h("span", { class: `dot ${e.outcome ?? "dry_run"}` }), " ", outcomeChip(e.outcome)),
-      h("td", null, codeInline(e.tool)),
+      h("td", { class: "nowrap" }, codeInline(e.tool)),
       h("td", null, targetSummary(e.target)),
       h("td", null, relTime(e.completedAt)),
       h("td", null, e.revertible ? chip("revertible", "info") : e.errorCode ? chip(e.errorCode, "danger") : null),
@@ -223,7 +225,7 @@ function renderDetail(e: EntryDetail): HTMLElement {
     wrap.append(collapse(h("span", null, "Before / after snapshots"), h("div", null, jsonBlock({ before: e.before, after: e.after }))));
   }
 
-  if (e.revertible) wrap.append(renderRevertSection(e));
+  if (e.revertible && app) wrap.append(renderRevertSection(e));
   else if (e.revertHint) wrap.append(h("div", { class: "hint" }, e.revertHint));
   return wrap;
 }
@@ -303,4 +305,7 @@ void initView("gojira-journal", {
   onCancelled: (reason) => mount(h("div", { class: "state" }, `Tool call cancelled${reason ? ` — ${reason}` : ""}.`)),
 }).then((a) => {
   app = a;
+  // Results can land before the handshake resolves; re-render so actions that
+  // need the bridge (refresh, drill-in, revert) become live.
+  if (lastParsed) renderParsed(lastParsed);
 });

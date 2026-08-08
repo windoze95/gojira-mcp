@@ -257,4 +257,7 @@ void initView("gojira-automation-rule", {
   onCancelled: (reason) => mount(h("div", { class: "state" }, `Tool call cancelled${reason ? ` — ${reason}` : ""}.`)),
 }).then((a) => {
   app = a;
+  // Results can land before the handshake resolves; re-render so row drill-in
+  // and "Load more" become live.
+  if (listRows.length) renderList();
 });

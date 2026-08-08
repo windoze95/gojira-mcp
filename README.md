@@ -25,6 +25,55 @@ session, not as a replacement.
 
 ---
 
+## Interactive UI
+
+Tools that benefit from it ship an [MCP Apps](docs/architecture/mcp-apps-ui.md)
+template, so UI-capable hosts (claude.ai web/Desktop/mobile, ChatGPT
+developer-mode connectors) render the result instead of a JSON blob. Text-only
+clients — including Claude Code — are unaffected.
+
+**Every destructive tool renders its dry-run as a diff card.** Nothing changes
+until you press Commit, which re-invokes the same tool with `commit: true`
+through the normal pipeline (auth, rate limit, site pinning, journal, audit).
+
+![Confirm card for a permission-scheme update, showing the RFC 6902 patch and a Commit button](docs/assets/ui/confirm-permission-scheme.png)
+
+Delete tools state the blast radius in the card. `projects.deleteJiraProject`
+is bimodal — trash (60-day undo) versus permanent — and says which one you are
+about to do:
+
+![Confirm card for a permanent project delete, flagged NO UNDO](docs/assets/ui/confirm-delete-permanent.png)
+
+**Operation journal** — timeline of what you changed, with per-entry drill-in
+(the diff is computed client-side from the before/after snapshots) and a
+dry-run-first revert:
+
+![Journal timeline listing recent operations with outcome, tool, target and revertibility](docs/assets/ui/journal-timeline.png)
+
+![Expanded journal entry showing target, request, and the patch applied by the operation](docs/assets/ui/journal-detail.png)
+
+![Revert preview showing the reverse patch and a Confirm revert button](docs/assets/ui/journal-revert-preview.png)
+
+**Assets (CMDB) AQL search** — object types carry different attribute sets, so
+columns are discovered from the response, with a column picker and paging:
+
+![Assets AQL results table with dynamic attribute columns and pagination](docs/assets/ui/aql-table.png)
+
+**Automation rules** — the trigger → conditions → actions tree, which is the
+part that reads worst as raw JSON:
+
+![Automation rule inspector showing a trigger, condition block, and nested actions](docs/assets/ui/automation-rule-tree.png)
+
+Views follow the host's theme and style tokens:
+
+![The journal timeline rendered in dark theme](docs/assets/ui/journal-timeline-dark.png)
+
+> Screenshots are produced by the local render harness (`npm run ui:harness`),
+> which drives the real MCP Apps postMessage bridge against fixture data — no
+> Atlassian tenant involved.
+
+---
+
 ## Quickstart
 
 > **Deploying for real?** Follow the end-to-end
