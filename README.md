@@ -19,9 +19,9 @@ session, not as a replacement.
 | **Transport** | StreamableHTTP, per-session in-memory |
 | **Auth** | OAuth 2.1 to MCP clients; OAuth 2.0 3LO to Atlassian; per-user API token side-channel; org-admin API token (separate gate) |
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
-| **Tool count** | 155 across 23 permission groups (post-remediation — tools targeting non-existent Atlassian endpoints were removed; see below) |
+| **Tool count** | 61 op-parameterized tools carrying 155 operations, across 23 permission groups (the CRUD collapse — every tool bundles 2-7 related operations behind an `op` field; see [`docs/tools/catalog.md`](docs/tools/catalog.md)) |
 | **Interactive UI** | MCP Apps (SEP-1865): every destructive tool renders its dry-run as a diff/confirm card; journal timeline, Assets AQL table, and automation-rule tree viewers. Renders in claude.ai/Desktop/mobile and ChatGPT dev-mode hosts; text-only clients unaffected. `GOJIRA_UI_ENABLED` — see [MCP Apps UI](docs/architecture/mcp-apps-ui.md) |
-| **Tests** | 93 unit tests across 19 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, site-pinning, and MCP Apps metadata/resources — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
+| **Tests** | 145 unit tests across 24 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, site-pinning, and MCP Apps metadata/resources — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
 
 ---
 
@@ -38,7 +38,7 @@ through the normal pipeline (auth, rate limit, site pinning, journal, audit).
 
 ![Confirm card for a permission-scheme update, showing the RFC 6902 patch and a Commit button](docs/assets/ui/confirm-permission-scheme.png)
 
-Delete tools state the blast radius in the card. `projects.deleteJiraProject`
+Delete tools state the blast radius in the card. `projects.delete`
 is bimodal — trash (60-day undo) versus permanent — and says which one you are
 about to do:
 
@@ -166,14 +166,14 @@ name. Lower is better for model selection accuracy — see
 
 | Pattern | Tool count | Use case |
 |---|---|---|
-| 1 — Default safe (admin sandbox) | **137** | Single team's daily admin instance |
-| 2 — Read-only audit | **80** | Compliance / forensic review |
-| 3 — JSM/Assets specialist | **54** | Service-desk operators |
-| 4 — Schemes/workflows admin | **63** | Jira config-changes only |
-| 5 — Org-admin (separate host) | **24** | `admin.atlassian.com` only |
-| 6 — Multi-tenant (prod + sandbox) | **137 each** | Two pinned instances side-by-side |
-| 7 — Local development | **137** | Same as default safe + debug logs |
-| 8 — Split-surface fleet | **80/65/51/35** (+24) | One tenant, several simultaneous instances — batch tools by connecting/disconnecting servers |
+| 1 — Default safe (admin sandbox) | **54** | Single team's daily admin instance |
+| 2 — Read-only audit | **26** | Compliance / forensic review |
+| 3 — JSM/Assets specialist | **20** | Service-desk operators |
+| 4 — Schemes/workflows admin | **28** | Jira config-changes only |
+| 5 — Org-admin (separate host) | **12** | `admin.atlassian.com` only |
+| 6 — Multi-tenant (prod + sandbox) | **54 each** | Two pinned instances side-by-side |
+| 7 — Local development | **54** | Same as default safe + debug logs |
+| 8 — Split-surface fleet | **26/26/21/19** (+12) | One tenant, several simultaneous instances — batch tools by connecting/disconnecting servers |
 
 ### Permission groups (legend)
 
@@ -185,31 +185,31 @@ for the per-tool breakdown and
 [`docs/tools/catalog.md`](docs/tools/catalog.md) for the full
 auto-generated catalog.
 
-| Group | Product | Tools | Auth | Surface |
+| Group | Product | Tools (operations) | Auth | Surface |
 |---|---|---|---|---|
-| `utility` | gojira itself | 7 | mixed | Health, identity, journal, side-channel API-token binding |
-| `read_projects` | Jira | 3 | oauth | List/get project admin view + details |
-| `write_projects` | Jira | 2 | oauth | Create + archive (delete is its own group) |
-| `delete_projects` | Jira | 1 | oauth | **Isolated** — `projects.deleteJiraProject` only |
-| `read_schemes` | Jira | 13 | oauth | Permission / notification / workflow / screen / issue-type / field-config schemes — read |
-| `write_schemes` | Jira | 7 | oauth | Create/update/delete schemes + project assignments |
-| `read_workflows` | Jira | 6 | oauth | List/get workflows + transition components |
-| `write_workflows` | Jira | 5 | oauth | Create/update/delete workflows, transitions, publish |
-| `read_automation` | Jira | 5 | api_token | Automation rules, manual-rule search, templates — read |
-| `write_automation` | Jira | 6 | api_token | Create (incl. from template)/update/delete/enable/disable rules |
-| `read_customfields` | Jira | 3 | oauth | Custom fields and contexts — read |
-| `write_customfields` | Jira | 5 | oauth | Create/update/delete fields, contexts, options |
-| `read_filters_dashboards` | Jira | 4 | oauth | List/get filters and dashboards |
-| `write_filters_dashboards` | Jira | 6 | oauth | Create/update/delete filters and dashboards |
-| `read_agile` | Jira Software | 6 | oauth | Boards, sprints, epics — read |
-| `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
-| `read_jsm_admin` | Jira Service Management | 17 | api_token | Service desks, queues, SLA state, forms — read |
-| `write_jsm_admin` | Jira Service Management | 7 | api_token | Same surface + form templates — create/update/delete |
-| `read_assets` | Assets (JSM add-on) | 10 | oauth | Assets/Insight schemas, types, objects — read |
-| `write_assets` | Assets (JSM add-on) | 13 | oauth | Mutate Assets data and schema |
-| `read_confluence_admin` | Confluence | 6 | api_token | Spaces, templates, blueprints, restrictions — read |
-| `write_confluence_admin` | Confluence | 4 | api_token | Create/update/delete spaces, set restrictions (restrictions need a paid Confluence plan) |
-| `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — **also gated by `GOJIRA_ENABLE_ORG_ADMIN`** |
+| `utility` | gojira itself | 6 (7 ops) | mixed | Health, identity, journal, side-channel API-token binding |
+| `read_projects` | Jira | 1 (3 ops) | oauth | List/get project admin view + details |
+| `write_projects` | Jira | 1 (2 ops) | oauth | Create + archive (delete is its own group) |
+| `delete_projects` | Jira | 1 (1 op) | oauth | **Isolated** — `projects.delete` only |
+| `read_schemes` | Jira | 3 (13 ops) | oauth | Permission / notification / workflow / screen / issue-type / field-config schemes — read |
+| `write_schemes` | Jira | 3 (7 ops) | oauth | Create/update/delete schemes + project assignments |
+| `read_workflows` | Jira | 1 (6 ops) | oauth | List/get workflows + transition components |
+| `write_workflows` | Jira | 3 (5 ops) | oauth | Create/update/delete workflows, transitions, publish |
+| `read_automation` | Jira | 3 (5 ops) | api_token | Automation rules, manual-rule search, templates — read |
+| `write_automation` | Jira | 3 (6 ops) | api_token | Create (incl. from template)/update/delete/enable/disable rules |
+| `read_customfields` | Jira | 1 (3 ops) | oauth | Custom fields and contexts — read |
+| `write_customfields` | Jira | 2 (5 ops) | oauth | Create/update/delete fields, contexts, options |
+| `read_filters_dashboards` | Jira | 2 (4 ops) | oauth | List/get filters and dashboards |
+| `write_filters_dashboards` | Jira | 4 (6 ops) | oauth | Create/update/delete filters and dashboards |
+| `read_agile` | Jira Software | 1 (6 ops) | oauth | Boards, sprints, epics — read |
+| `write_agile` | Jira Software | 1 (2 ops) | oauth | Create/update sprints |
+| `read_jsm_admin` | Jira Service Management | 3 (17 ops) | api_token | Service desks, queues, SLA state, forms — read |
+| `write_jsm_admin` | Jira Service Management | 4 (7 ops) | api_token | Same surface + form templates — create/update/delete |
+| `read_assets` | Assets (JSM add-on) | 3 (10 ops) | oauth | Assets/Insight schemas, types, objects — read |
+| `write_assets` | Assets (JSM add-on) | 4 (13 ops) | oauth | Mutate Assets data and schema |
+| `read_confluence_admin` | Confluence | 2 (6 ops) | api_token | Spaces, templates, blueprints, restrictions — read |
+| `write_confluence_admin` | Confluence | 3 (4 ops) | api_token | Create/update/delete spaces, set restrictions (restrictions need a paid Confluence plan) |
+| `admin_org` | Atlassian Org (`admin.atlassian.com`) | 6 (17 ops) | org_admin | All org-admin ops — **also gated by `GOJIRA_ENABLE_ORG_ADMIN`** |
 
 Notes:
 - `delete_projects` is split out from `write_projects` so an operator
@@ -239,7 +239,7 @@ Notes:
   discovery uses. Assets also requires a **Premium** JSM plan; on lower
   plans every Assets call `403`s.
 
-### Pattern 1 — Default safe (admin sandbox) · 137 tools
+### Pattern 1 — Default safe (admin sandbox) · 54 tools
 
 Daily admin work, no destructive project deletion, no org-admin path.
 Good starting point for a single team's instance.
@@ -258,7 +258,7 @@ MCP_SERVER_URL=https://gojira.example.com
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
 ```
 
-### Pattern 2 — Read-only audit · 80 tools
+### Pattern 2 — Read-only audit · 26 tools
 
 Only `utility` + every `read_*` group enabled. Useful for compliance
 reviewers, incident investigators, or any flow that must not mutate
@@ -272,7 +272,7 @@ GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,read_assets,read_automation,read_cu
 
 (Same auth/secret/cloud config as Pattern 1.)
 
-### Pattern 3 — JSM/Assets specialist · 54 tools
+### Pattern 3 — JSM/Assets specialist · 20 tools
 
 Service-desk operators who only need JSM and Assets.
 
@@ -284,7 +284,7 @@ ATLASSIAN_OAUTH_SCOPES=offline_access read:me read:account read:jira-work write:
 GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets
 ```
 
-### Pattern 4 — Schemes/workflows admin · 63 tools
+### Pattern 4 — Schemes/workflows admin · 28 tools
 
 Configuration-change instance for Jira admins. JSM, Assets, Confluence,
 agile, and filters/dashboards are absent.
@@ -303,7 +303,7 @@ The automation groups don't ride the OAuth scopes above — each user
 binds a Jira-admin API token via `gojira.bindApiToken` (see the
 legend notes).
 
-### Pattern 5 — Org-admin (separate instance, separate host) · 24 tools
+### Pattern 5 — Org-admin (separate instance, separate host) · 12 tools
 
 Run on its own hostname/port. Only `admin_org` and utility tools
 register. Audit goes to a separate channel.
@@ -335,7 +335,7 @@ it would let any licensed user act with this deployment's global
 org-admin token. The permitted set is operator-declared and fails
 closed.
 
-### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 137 tools each
+### Pattern 6 — Multi-tenant (prod + sandbox side-by-side) · 54 tools each
 
 Two instances, same image, two compose stacks, two hostnames:
 
@@ -349,7 +349,7 @@ both cloudIds can connect both as separate connectors in their MCP
 client; site pinning ensures each instance only ever talks to its own
 tenant.
 
-### Pattern 7 — Local development · 137 tools
+### Pattern 7 — Local development · 54 tools
 
 ```bash
 ATLASSIAN_OAUTH_CLIENT_ID=...
@@ -364,21 +364,20 @@ NODE_ENV=development
 # no PINNED_CLOUD_ID — use the user's primary cloudId
 ```
 
-### Pattern 8 — Split-surface fleet · 80/65/51/35 (+24) tools
+### Pattern 8 — Split-surface fleet · 26/26/21/19 (+12) tools
 
 One tenant, one image, several *simultaneous* containers — each serving a
-different slice of the catalog on its own port. Instead of toggling 155
-tools in your MCP client, connect and disconnect whole servers to batch
+different slice of the catalog on its own port. Connect and disconnect whole servers to batch
 tool availability to the work at hand. Full guide:
 [`docs/deployment/profiles.md`](docs/deployment/profiles.md).
 
 | Profile | Port | Tools | Surface |
 |---|---|---|---|
-| `gojira-readonly` | 8081 | 80 | `utility` + every `read_*` group — stay connected to this one; also the fleet's OAuth callback anchor |
-| `gojira-service` | 8082 | 65 | JSM admin + forms + Assets/CMDB + automation, read+write |
-| `gojira-platform` | 8083 | 51 | Projects, schemes, workflows, custom fields, read+write (`delete_projects` opt-in) |
-| `gojira-workspace` | 8084 | 35 | Agile boards, filters/dashboards, Confluence spaces, read+write |
-| `gojira-org` | 8085 | 24 | `admin_org`, isolated; only starts with `--profile org` |
+| `gojira-readonly` | 8081 | 26 | `utility` + every `read_*` group — stay connected to this one; also the fleet's OAuth callback anchor |
+| `gojira-service` | 8082 | 26 | JSM admin + forms + Assets/CMDB + automation, read+write |
+| `gojira-platform` | 8083 | 21 | Projects, schemes, workflows, custom fields, read+write (`delete_projects` opt-in) |
+| `gojira-workspace` | 8084 | 19 | Agile boards, filters/dashboards, Confluence spaces, read+write |
+| `gojira-org` | 8085 | 12 | `admin_org`, isolated; only starts with `--profile org` |
 
 The fleet shares one Redis and one Atlassian OAuth app: you consent once
 per instance (against the same app), bind the API token once for the whole

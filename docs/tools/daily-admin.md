@@ -5,39 +5,53 @@ Assets/Insight CMDB, Jira automation rules, custom fields, and the safe
 project-management surface (create + archive; delete is in its own group
 covered in [schemes-and-workflows.md](schemes-and-workflows.md)).
 
-Roughly 71 tools across 10 permission groups. The auto-generated
-[catalog](catalog.md) lists every tool with its full input schema.
+25 tools carrying 71 operations across 10 permission groups. Most are
+op-parameterized — one tool, several operations selected by a required
+`op` field, called as `{ "op": "…", …args }`. The auto-generated
+[catalog](catalog.md) has every input schema.
 
 ## JSM admin (`read_jsm_admin` / `write_jsm_admin`)
 
 **Credential:** API token side-channel (`gojira.bindApiToken` must be
 called first per user).
 
-### Service desks
-- `jsm.listServiceDesks` — paginated.
-- `jsm.getServiceDesk(serviceDeskId)`.
+### `jsm.readServiceDesk` — desks and request types
 
-### Request types
-- `jsm.listRequestTypes(serviceDeskId, groupId?)`.
-- `jsm.getRequestType(serviceDeskId, requestTypeId)`.
-- `jsm.createRequestType(serviceDeskId, issueTypeId, name, description?, helpText?)` — destructive, revertible.
-- `jsm.deleteRequestType(serviceDeskId, requestTypeId)` — destructive, **irreversible**.
-- `jsm.getRequestTypeFields(serviceDeskId, requestTypeId)`.
-- `jsm.getRequestTypeGroups(serviceDeskId)`.
+`listServiceDesks` (paginated via `start`/`limit`),
+`getServiceDesk(serviceDeskId)`, `listRequestTypes` (optionally scoped to
+a request-type `groupId`), `getRequestType`, `getRequestTypeFields` (the
+field set behind a request type), and `getRequestTypeGroups`.
 
-### Queues (read-only — the public API has no queue writes)
-- `jsm.listQueues(serviceDeskId)`.
-- `jsm.getQueue(serviceDeskId, queueId)`.
-- `jsm.getQueueIssues(serviceDeskId, queueId, start?, limit?)`.
+### `jsm.readSupport` — queues, SLA state, organizations, KB
 
-### SLA state, organizations & KB
-- `jsm.getRequestSla(requestIdOrKey)` — per-request SLA *state* (SLA goal
-  *configuration* has no public API; see the
-  [capability map](../architecture/jsm-capability-map.md)).
-- `jsm.listJsmOrganizations(serviceDeskId?)`.
-- `jsm.addCustomersToOrganization(organizationId, accountIds?, usernames?, commit)` — destructive, revertible (removes the customers it added).
-- `jsm.removeCustomersFromOrganization(organizationId, accountIds?, usernames?, commit)` — destructive, revertible (re-adds the customers it removed).
-- `jsm.searchKnowledgeBaseArticles(serviceDeskId, query)`.
+| op | Notes |
+|---|---|
+| `listQueues`, `getQueue`, `getQueueIssues` | read-only — the public API has no queue writes |
+| `getRequestSla` | keyed by ISSUE (`issueIdOrKey`), not by desk. Per-request SLA *state* only; goal *configuration* has no public API (see the [capability map](../architecture/jsm-capability-map.md)) |
+| `listJsmOrganizations` | global when `serviceDeskId` is omitted |
+| `searchKnowledgeBaseArticles` | article *linking* is UI-only |
+
+### `jsm.manage` — additions (destructive, `commit`-gated)
+
+- `createRequestType(serviceDeskId, issueTypeId, name, description?, helpText?)`
+  — revertible; the revert deletes the created type.
+- `addCustomersToOrganization(organizationId, accountIds?/usernames?)` —
+  conditionally revertible; removes only the customers it actually added.
+
+### `jsm.delete` — removals (destructive, `commit`-gated)
+
+- `deleteRequestType(serviceDeskId, requestTypeId)` — **irreversible**.
+- `removeCustomersFromOrganization(organizationId, accountIds?/usernames?)`
+  — conditionally revertible; re-adds only the customers it actually removed.
+
+Both membership ops snapshot the organization's members around the
+mutation and journal the diff; the revert acts on that diff, not on the
+submitted list, because submitting an existing member is a no-op for them
+and reverting the whole list would evict someone the call never added. The
+diff is also what makes a `usernames`-keyed call revertible at all —
+Atlassian privacy settings routinely redact `emailAddress` from the
+membership list, but accountIds show up in the diff. If the membership
+can't be read, the op journals `revertible: false` rather than guess.
 
 > Earlier versions also shipped queue/SLA/portal *write* tools — those called
 > endpoints that don't exist in Atlassian Cloud and were removed. What remains
@@ -50,14 +64,30 @@ called first per user).
 (`api.atlassian.com/jira/forms/cloud/{cloudId}`) needs no OAuth scope.
 Full template lifecycle verified live.
 
-- `forms.listFormTemplates(projectIdOrKey)` — portal request forms / intake forms.
-- `forms.getFormTemplate(projectIdOrKey, formId)` — includes the full `design` document (export/adapt).
-- `forms.getRequestTypeForm(serviceDeskId, requestTypeId)`.
-- `forms.listIssueForms(issueIdOrKey)` / `forms.getIssueFormAnswers(issueIdOrKey, formId)`.
-- `forms.createFormTemplate(projectIdOrKey, form)` — destructive, revertible.
-- `forms.updateFormTemplate(projectIdOrKey, formId, form)` — destructive, revertible; attach to portal
-  request types via `portalRequestTypeIds`.
-- `forms.deleteFormTemplate(projectIdOrKey, formId)` — destructive, **irreversible** (design captured in journal).
+### `forms.read`
+
+- `listFormTemplates(projectIdOrKey)` — portal request forms / intake forms.
+- `getFormTemplate(projectIdOrKey, formId)` — includes the full `design`
+  document (export/adapt).
+- `getRequestTypeForm(serviceDeskId, requestTypeId)` — 404 if the request
+  type has no form.
+- `listIssueForms(issueIdOrKey)` — agent view of an issue's forms.
+- `getIssueFormAnswers(issueIdOrKey, formId)` — `formId` here is the ISSUE
+  form id, not the template id.
+
+### `forms.manageTemplate` — destructive, `commit`-gated, both revertible
+
+- `createFormTemplate(projectIdOrKey, form)` — `form` must carry a `design`
+  document; export one with `forms.read` `getFormTemplate` for the shape.
+- `updateFormTemplate(projectIdOrKey, formId, form)` — replace in place,
+  full before/after; attach to portal request types via
+  `portalRequestTypeIds`.
+
+### `forms.delete`
+
+Single-op tool, so no `op` field: `{ projectIdOrKey, formId, commit: true }`.
+**Irreversible** — the full template, design included, is captured in the
+journal `before`.
 
 ## Assets / Insight (`read_assets` / `write_assets`)
 
@@ -70,45 +100,39 @@ a bound API token alone is insufficient (discovery raises
 Assets is a **Premium** JSM feature. On a non-Premium site these tools
 403 — that is a licensing limit, not a bug.
 
-### Schemas
-- `assets.listObjectSchemas`.
-- `assets.getObjectSchema(schemaId)`.
-- `assets.createObjectSchema(name, objectSchemaKey, description?, commit)` — destructive.
-- `assets.updateObjectSchema(schemaId, name?, objectSchemaKey?, description?, commit)` — destructive, revertible.
-- `assets.deleteObjectSchema(schemaId, commit)` — destructive, **irreversible** (deletes the whole schema — types + objects; the full schema definition is captured in the journal, so export it first).
-- `assets.exportAssetSchema(schemaId)` — emits schema + types + attributes as one JSON. Useful as a backup before destructive ops.
-
-### Object types
-- `assets.listObjectTypes(schemaId)`.
-- `assets.getObjectType(objectTypeId)`.
-- `assets.createObjectType(schemaId, name, description?, iconId?, inherited?, parentObjectTypeId?, commit)` — destructive.
-- `assets.updateObjectType(objectTypeId, name?, description?, iconId?, commit)` — destructive, revertible.
-- `assets.deleteObjectType(objectTypeId, commit)` — destructive, **irreversible** (deletes the type and its objects; the type definition is captured in the journal).
-
-### Attributes
-- `assets.getObjectTypeAttributes(objectTypeId)`.
-- `assets.createObjectTypeAttribute(objectTypeId, attribute, commit)` — destructive.
-- `assets.updateObjectTypeAttribute(objectTypeId, attributeId, attribute, commit)` — destructive, revertible. `objectTypeId` is required: it is part of the path, not just a lookup hint.
-- `assets.deleteObjectTypeAttribute(objectTypeId, attributeId, commit)` — destructive, **irreversible** (no single-attribute GET exists, so the journal captures the object type's full attribute list for reconstruction).
-
-### Objects (data plane)
-- `assets.aqlSearch(qlQuery, page?, resultPerPage?, includeAttributes?)`.
-- `assets.getObject(objectId)`.
-- `assets.createObject(objectTypeId, attributes[], hasAvatar?, commit)` — destructive.
-- `assets.updateObject(objectId, attributes[], commit)` — destructive, revertible.
-- `assets.deleteObject(objectId, commit)` — destructive, irreversible.
-
-### References & metadata (read-only)
-- `assets.getObjectReferences(objectId)`.
-- `assets.getObjectHistory(objectId)`.
+- `assets.readSchema` — `listObjectSchemas`, `getObjectSchema(schemaId)`,
+  `listObjectTypes(schemaId)` and `getObjectTypeAttributes(objectTypeId)`
+  (the id is the PARENT in both), `getObjectType`, and
+  `exportAssetSchema(schemaId)`, which emits schema + types + attributes
+  as one JSON — useful as a backup before destructive ops.
+- `assets.readObject` — `getObject`, `getObjectReferences`,
+  `getObjectHistory`, all by `objectId`.
+- `assets.aqlSearch(qlQuery, page?, resultPerPage?, includeAttributes?)` —
+  single-op, so no `op` field.
+- `assets.manageSchema` — destructive, `commit`-gated. Create/update pairs
+  for the three modelling levels: `createObjectSchema` /
+  `updateObjectSchema`, `createObjectType` / `updateObjectType`,
+  `createObjectTypeAttribute` / `updateObjectTypeAttribute`. The updates
+  are revertible, the creates are not. `createObjectType` requires
+  `iconId` (ids from `GET /icon/global`), and `updateObjectTypeAttribute`
+  requires `objectTypeId`: it is part of the path, not just a lookup hint.
+- `assets.manageObject` — destructive, `commit`-gated:
+  `createObject(objectTypeId, attributes[], hasAvatar?)` and
+  `updateObject(objectId, attributes[])`, the update revertible and
+  restoring the prior values of exactly the attributes it touched.
+- `assets.delete` — destructive, `commit`-gated, every op
+  **irreversible**. `deleteObjectSchema` cascades to every type and object
+  in the schema (the whole definition lands in the journal `before`, but
+  export it first); `deleteObjectType` takes the type and its objects;
+  `deleteObject` takes one object; `deleteObjectTypeAttribute` journals the
+  object type's *full* attribute list, because no single-attribute GET
+  exists to reconstruct from.
+- `assets.startImport(importId)` — single-op, irreversible.
 
 References are **read-only**. There is no add/remove-reference tool
 because there is no such endpoint: a reference is expressed as an
 attribute value, so you create or drop one by writing the referencing
-attribute through `assets.createObject` / `assets.updateObject`.
-
-### Bulk import
-- `assets.startImport(importId, commit)` — destructive, irreversible.
+attribute through `assets.manageObject`.
 
 `startImport` triggers a **pre-configured** import by its id. The import
 itself (source, mapping, schedule) is configured in the Assets UI; the
@@ -125,30 +149,41 @@ permissions, so create the token after the grant. No Forge or Connect
 app is involved: the tools call
 `api.atlassian.com/automation/public/jira/{cloudId}/rest/v1` directly.
 
-- `automation.listAutomationRules(cursor?, limit?)` — paginated rule summaries.
-- `automation.getAutomationRule(ruleId)` — full rule by UUID.
-- `automation.searchManualRules(payload)` — manually-triggerable rules for a given object (e.g. an issue).
-- `automation.searchAutomationTemplates(payload?)` — search the rule-template catalog (pass `{}` for all).
-- `automation.getAutomationTemplate(templateId)`.
-- `automation.createAutomationRule(rule, commit?)` — destructive, revertible (disable, then delete by UUID).
-- `automation.createRuleFromTemplate(templateId, ruleHome, parameters?, commit?)` — destructive, revertible (disable, then delete by UUID). `ruleHome` is the scope ARI, e.g. `ari:cloud:jira:{cloudId}:project/{projectId}`.
-- `automation.updateAutomationRule(ruleId, rule, commit?)` — destructive, revertible (full-before/full-after).
-- `automation.deleteAutomationRule(ruleId, commit?)` — destructive, **irreversible**. Disables the rule first (the API rejects deleting an enabled rule) and re-enables it if the delete fails.
-- `automation.enableAutomationRule(ruleId, commit?)` — destructive, revertible (restores the captured prior state).
-- `automation.disableAutomationRule(ruleId, commit?)` — destructive, revertible (restores the captured prior state).
+- `automation.readRule` — `listAutomationRules(cursor?, limit?)` for
+  cursor-paged summaries, `getAutomationRule(ruleId)` for one full rule by
+  UUID.
+- `automation.readTemplate` — `searchAutomationTemplates(payload?)` (pass
+  `{}` for all) and `getAutomationTemplate(templateId)`.
+- `automation.searchManualRules(payload)` — single-op; manually-triggerable
+  rules for a given object (e.g. an issue).
+- `automation.manageRule` — destructive, `commit`-gated, all revertible:
+  `createAutomationRule(rule)` (revert = disable, then delete by UUID),
+  `updateAutomationRule(ruleId, rule)` (full before/after — rule JSON does
+  not patch cleanly), `enableAutomationRule` / `disableAutomationRule`
+  (restore the captured prior state).
+- `automation.createRuleFromTemplate(templateId, ruleHome, parameters?)` —
+  single-op, revertible the same way. `ruleHome` is the scope ARI, e.g.
+  `ari:cloud:jira:{cloudId}:project/{projectId}`.
+- `automation.delete(ruleId)` — single-op, destructive, **irreversible**.
+  Disables the rule first (the API rejects deleting an enabled rule) and
+  re-enables it if the delete fails.
 
 ## Custom fields (`read_customfields` / `write_customfields`)
 
 **Credential:** OAuth.
 
-- `customfields.listCustomFields(startAt?, maxResults?, query?, type[]?, id[]?)`.
-- `customfields.getCustomField(fieldId, include_contexts?)`.
-- `customfields.createCustomField(name, description?, type, searcherKey?, commit)` — destructive, revertible.
-- `customfields.updateCustomField(fieldId, name?, description?, searcherKey?, commit)` — destructive, revertible.
-- `customfields.deleteCustomField(fieldId, commit)` — destructive, **irreversible** (may detach values from issues).
-- `customfields.listCustomFieldContexts(fieldId, startAt?, maxResults?)`.
-- `customfields.assignCustomFieldToProjects(fieldId, contextId, projectIds[], commit)` — destructive, revertible.
-- `customfields.setCustomFieldOptions(fieldId, contextId, options[], commit)` — destructive, **not revertible**.
+- `customfields.read` — `listCustomFields(startAt?, maxResults?, query?,
+  type[]?, id[]?)`, `getCustomField(fieldId, includeContexts?)`,
+  `listCustomFieldContexts(fieldId, startAt?, maxResults?)` (page size
+  caps at 100).
+- `customfields.manage` — destructive, `commit`-gated:
+  `createCustomField(name, type, description?, searcherKey?)` and
+  `updateCustomField(fieldId, …)` are revertible, as is
+  `assignCustomFieldToProjects(fieldId, contextId, projectIds[])` (the
+  revert removes the same project ids). `setCustomFieldOptions(fieldId,
+  contextId, options[])` is **not** revertible — see below.
+- `customfields.delete` — single-op: `{ fieldId, commit: true }`.
+  **Irreversible**, and may detach values from issues.
 
 `setCustomFieldOptions` is an upsert, not a replace: Jira splits the two
 verbs, so options *with* an `id` are PUT (update in place) and options
@@ -160,18 +195,25 @@ cleanup.
 
 ## Projects (`read_projects` / `write_projects`)
 
-**Credential:** OAuth. Project deletion lives in its own permission
-group (see [schemes-and-workflows.md](schemes-and-workflows.md#delete-projects)).
+**Credential:** OAuth. Project deletion is a separate opt-in tool,
+`projects.delete`, in its own permission group — see the *Delete
+projects* section of
+[schemes-and-workflows.md](schemes-and-workflows.md).
 
-- `projects.listJiraProjects(startAt?, maxResults?, expand[]?, query?, typeKey?, orderBy?)` — admin view.
-- `projects.getJiraProject(project, expand[]?)`.
-- `projects.getJiraProjectDetails(project)` — includes components + roles + permissions.
-- `projects.createJiraProject(key, name, projectTypeKey, projectTemplateKey?, leadAccountId, description?, assigneeType?, url?)` — destructive, not auto-revertible.
-- `projects.archiveJiraProject(project)` — destructive, revertible (restore).
+- `projects.read` — `listJiraProjects(startAt?, maxResults?, expand[]?,
+  query?, typeKey?, orderBy?)` (admin view),
+  `getJiraProject(project, expand[]?)`, and
+  `getJiraProjectDetails(project)`, which adds components, roles, and
+  notification-scheme assignments in one call.
+- `projects.manage` — destructive, `commit`-gated:
+  `createJiraProject(key, name, projectTypeKey, leadAccountId,
+  projectTemplateKey?, description?, assigneeType?, url?)` is not
+  auto-revertible; `archiveJiraProject(project)` is revertible via
+  restore.
 
 ## See also
 
-- [Schemes and workflows](schemes-and-workflows.md) — including isolated `delete_projects`
+- [Schemes and workflows](schemes-and-workflows.md) — including the isolated `delete_projects` group
 - [Agile and views](agile-and-views.md)
 - [Org admin](org-admin.md)
 - [Full catalog with input schemas](catalog.md)

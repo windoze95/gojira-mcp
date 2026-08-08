@@ -119,6 +119,7 @@ const automationSearchManualRules = defineTool({
   group: "read_automation",
   authMethod: "api_token",
   needsCloudId: true,
+  readOnly: true,
   input: { payload: z.record(z.string(), z.unknown()).describe("The rule/manual/search request body.") },
   handler: async (input, ctx) => {
     const resp = await ctx.client.automation().post<unknown>(`${BASE}/rule/manual/search`, input.payload);

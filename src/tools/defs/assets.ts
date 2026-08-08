@@ -202,6 +202,7 @@ const assetsAqlSearch = defineTool({
   group: "read_assets",
   authMethod: "oauth",
   needsCloudId: true,
+  readOnly: true,
   ui: { resourceUri: AQL_TABLE_UI_URI },
   input: {
     qlQuery: z.string().min(1),

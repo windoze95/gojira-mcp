@@ -124,8 +124,8 @@ When you see a `REFRESH_TOKEN_REUSE` event:
    `account_id` in the window. Any `outcome:"success"` is a candidate
    action by an attacker.
 4. **Pivot via journal.** For destructive successes, look up the
-   `operation_id` in the journal (`gojira.listRecentOperations` /
-   `gojira.getOperation`) to see exact before/after snapshots.
+   `operation_id` in the journal (`gojira.readJournal` with op
+   `listRecentOperations` / `getOperation`) to see exact before/after snapshots.
 5. **Revert reversible damage.** Use `gojira.revertOperation(op_id,
    commit:true)` for each reversible op.
 6. **Notify the user.** They need to revoke any Atlassian app grants

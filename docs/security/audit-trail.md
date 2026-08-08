@@ -16,11 +16,11 @@ syslog-encoded for syslog targets.
     "name": null,
     "email": null
   },
-  "tool": "customfields.createCustomField",
+  "tool": "customfields.manage",
   "group": "write_customfields",
   "cloud_id": "abc-123",
   "client_id": "uuid-of-mcp-client",
-  "request": { "name": "Color", "type": "..." },
+  "request": { "op": "createCustomField", "name": "Color", "type": "..." },
   "outcome": "success",
   "error_code": null,
   "duration_ms": 142,
@@ -39,16 +39,53 @@ syslog-encoded for syslog targets.
 | `event` | Always `"tool_call"`. |
 | `actor.account_id` | The bearer's `accountId` (load-bearing — see [auth-bridge.md](../architecture/auth-bridge.md)). |
 | `actor.name`, `actor.email` | Reserved; populated from `StoredToken` if available. |
-| `tool` | The dotted tool name. |
+| `tool` | The dotted tool name — the **collapsed** one for op-parameterized tools (`customfields.manage`, not `customfields.createCustomField`). See [Tool name granularity](#tool-name-granularity). |
 | `group` | The tool's permission group (e.g. `read_jsm_admin`, `admin_org`, `utility`). |
 | `cloud_id` | The resolved cloudId for this call (pinned or primary). `null` for utility / org-admin. |
 | `client_id` | The MCP client's registered client_id. |
-| `request` | The parsed input, with keys matching `token`, `secret`, or `password` redacted as `[REDACTED]`. |
+| `request` | The parsed input, with keys matching `token`, `secret`, or `password` redacted as `[REDACTED]`. For op tools this includes the caller's `op`, which is what distinguishes one operation from another. |
 | `outcome` | `"success"`, `"failure"`, or `"dry_run"`. |
 | `error_code` | One of the tool error codes when `outcome=failure`; `null` otherwise. |
 | `duration_ms` | Wall-clock duration from tool entry to envelope emission. |
 | `operation_id` | UUID matching the `operation_id` returned in the success envelope and the journal entry's `opId`. |
 | `org_id` | `admin_org` tools only. |
+
+## Tool name granularity
+
+Since the CRUD collapse, most operations live inside op-parameterized tools:
+one MCP tool carrying several operations selected by a required `op`
+argument. Audit records follow the wire, not the old catalog —
+
+- **`tool` is the collapsed name.** Creating a custom field records
+  `"tool": "customfields.manage"`. It is what the client actually called, and
+  it is what `group` is derived from, so group-scoped queries are unaffected.
+- **`request.op` is the operation.** The audit `request` is the caller's
+  parsed input, so the op rides along in it (as does `commit` on destructive
+  tools; `outcome: "dry_run"` is the reliable signal for an uncommitted call).
+  Anything that used to key on the per-endpoint tool name now keys on the
+  `tool` + `request.op` pair.
+
+Cardinality dropped accordingly: 61 tool names covering 155 operations. If
+you have alerts, dashboards, or retention rules that enumerate tool names,
+they need the new pair — a rule matching `customfields.createCustomField`
+will silently match nothing rather than fail.
+
+The journal records the same pair the same way (`entry.tool` collapsed,
+`entry.request.op` for the operation), so `operation_id` still joins an audit
+record to its journal entry with no translation.
+
+### Queries that span the collapse
+
+Records written **before** the collapse carry the pre-collapse names and no
+`op`. To query a period that straddles the cutover you need both spellings,
+and the mapping between them is published as the **Legacy name map** appendix
+of [`docs/tools/catalog.md`](../tools/catalog.md) — generated from the same
+alias registry the server reverts pre-collapse journal entries through, so it
+cannot drift from the code. Treat it as the SIEM migration table: left column
+matches historical records, right column matches current ones.
+
+Log lines are never rewritten retroactively. Old records stay exactly as
+emitted; the map is how you read them.
 
 ## Targets
 
@@ -122,14 +159,34 @@ The triplet `operation_id` / `reference_id` / journal `opId`:
 # tail the file target
 tail -F /var/log/gojira/audit.log | jq
 
-# all destructive calls in the last hour
-jq 'select(.tool | test("create|update|delete|enable|disable|assign|set|publish|provision|deactivate|verify|restore|archive|remove|import"))
+# all destructive calls in the last hour.
+# Collapsed tool names no longer carry the verb, so don't regex for one: every
+# destructive tool is named `<domain>.manage*` or `<domain>.delete`, plus five
+# named singles. Cross-check against the catalog's destructive markers when the
+# catalog changes.
+jq 'select((.tool | test("\\.(manage|delete)"))
+           or (.tool | IN("gojira.revertOperation", "assets.startImport",
+                          "automation.createRuleFromTemplate",
+                          "confluence.setContentRestrictions", "orgAdmin.setOrgPolicy")))
     | select(.ts > (now - 3600 | strftime("%Y-%m-%dT%H:%M:%SZ")))' /var/log/gojira/audit.log
+
+# what one op tool was actually asked to do, broken down by operation
+jq -r 'select(.tool == "schemes.managePermission") | .request.op' \
+    /var/log/gojira/audit.log | sort | uniq -c
+
+# every call of one pre-collapse operation, across the cutover: the old tool
+# name for historical records, the new tool+op pair for current ones
+jq 'select(.tool == "customfields.createCustomField"
+           or (.tool == "customfields.manage" and .request.op == "createCustomField"))' \
+    /var/log/gojira/audit.log
 
 # every admin_org action by a specific actor
 jq 'select(.group == "admin_org" and .actor.account_id == "70121:abcd")' \
     /var/log/gojira/org-admin.log
 ```
+
+`group` never changed spelling in the collapse, so group-scoped queries like
+the last one need no cutover handling.
 
 ## See also
 

@@ -6,12 +6,12 @@ is the runbook side: how to use the journal day-to-day.
 
 ## "What did Claude do in our Jira yesterday?"
 
-Use `gojira.listRecentOperations` from your own MCP session.
+Use `gojira.readJournal` (op `listRecentOperations`) from your own MCP session.
 
 ```jsonc
 // tool call
 {
-  "tool": "gojira.listRecentOperations",
+  "tool": "gojira.readJournal",
   "input": {
     "since": "2026-05-10T00:00:00Z",
     "until": "2026-05-11T00:00:00Z",
@@ -53,14 +53,14 @@ becomes the new entry — the chain stays auditable.
 
 Yes — manually, using the captured `before` snapshot.
 
-1. `gojira.getOperation(op_id)` → returns the full entry including the
+1. `gojira.readJournal` (op `getOperation`, `op_id`) → returns the full entry including the
    `before` payload.
 2. Decide which tool reproduces that prior state. For:
    - An update: re-PUT the `before` body.
    - A delete of something the inverse-create tool covers (e.g.,
      deleted custom field): use the create tool with the captured
      `before` shape.
-   - A delete of something un-recreatable (e.g., `projects.deleteJiraProject`
+   - A delete of something un-recreatable (e.g., `projects.delete`
      without `enableUndo:true`): you need an out-of-band backup.
 
 The `revertHint` field in the journal entry calls out the recommended

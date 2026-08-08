@@ -4,6 +4,7 @@ import { z } from "zod";
 import { allTools } from "../src/tools/defs/index.js";
 import type { AnyToolDef } from "../src/tools/defs/defineTool.js";
 import { ALL_PERMISSION_GROUPS } from "../src/tools/permissionGroups.js";
+import { allLegacyAliases } from "../src/operations/legacyAliases.js";
 
 const OUT_PATH = "docs/tools/catalog.md";
 
@@ -188,6 +189,27 @@ function main(): void {
       sections.push(renderTool(t));
     }
     sections.push("---");
+    sections.push("");
+  }
+
+  // Appendix: the pre-collapse → current name map, generated from the live
+  // alias registry. Doubles as the audit/SIEM name-migration reference;
+  // pre-collapse journal entries revert through these aliases for their
+  // 30-day TTL. Living inside catalog.md puts it under the CI freshness gate.
+  const aliases = [...allLegacyAliases()].sort((a, b) => a[0].localeCompare(b[0]));
+  if (aliases.length > 0) {
+    sections.push("## Legacy name map (pre-collapse → current)");
+    sections.push("");
+    sections.push(
+      "_Generated from the live legacy-alias registry. Audit records and journal entries written before the " +
+        "CRUD collapse carry the pre-collapse names on the left; they resolve to the current tool (and op) on the right._",
+    );
+    sections.push("");
+    sections.push("| Pre-collapse tool | Now |");
+    sections.push("|---|---|");
+    for (const [oldName, alias] of aliases) {
+      sections.push(`| \`${oldName}\` | \`${alias.tool}\`${alias.op ? ` · op \`${alias.op}\`` : ""} |`);
+    }
     sections.push("");
   }
 

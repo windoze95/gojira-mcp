@@ -15,14 +15,14 @@ tool surface.
 
 | Profile | Port | Tools | Groups beyond `utility` |
 |---|---|---|---|
-| `gojira-readonly` | 8081 | 80 | all 10 `read_*` groups |
-| `gojira-service` | 8082 | 65 | `read/write_jsm_admin`, `read/write_assets`, `read/write_automation` |
-| `gojira-platform` | 8083 | 51 | `read/write_customfields`, `read/write_projects`, `read/write_schemes`, `read/write_workflows` (`delete_projects` commented opt-in → 52) |
-| `gojira-workspace` | 8084 | 35 | `read/write_agile`, `read/write_filters_dashboards`, `read/write_confluence_admin` |
-| `gojira-org` | 8085 | 24 | `admin_org` (+ `GOJIRA_ENABLE_ORG_ADMIN=true`); opt-in via `--profile org` |
+| `gojira-readonly` | 8081 | 26 | all 10 `read_*` groups |
+| `gojira-service` | 8082 | 26 | `read/write_jsm_admin`, `read/write_assets`, `read/write_automation` |
+| `gojira-platform` | 8083 | 21 | `read/write_customfields`, `read/write_projects`, `read/write_schemes`, `read/write_workflows` (`delete_projects` commented opt-in → 22) |
+| `gojira-workspace` | 8084 | 19 | `read/write_agile`, `read/write_filters_dashboards`, `read/write_confluence_admin` |
+| `gojira-org` | 8085 | 12 | `admin_org` (+ `GOJIRA_ENABLE_ORG_ADMIN=true`); opt-in via `--profile org` |
 
-Every profile includes `utility` (7 tools: health, whoami, bindApiToken,
-listEnabledTools, journal list/get/revert) — nothing auto-injects it, so it
+Every profile includes `utility` (6 tools: health, whoami, bindApiToken,
+listEnabledTools, readJournal, revertOperation) — nothing auto-injects it, so it
 appears in every profile's group list explicitly. The write surface is
 partitioned: no write group appears in two profiles. `readonly` deliberately
 overlaps the read groups so it can stay connected as the ambient browse/audit
@@ -134,7 +134,7 @@ Consequences:
 | Tool surface | **Isolated.** Registration filter + dispatch-time re-check per instance, as always. |
 | Reverts | **Gated.** `gojira.revertOperation` (and its dry run) requires the *original* tool's group on the calling instance; the refusal names the owning instance (journal entries carry `instance`). |
 | Upstream Atlassian credential + API-token binding | **Shared** — bind once, consent per instance against one app. |
-| Operation journal | **Shared** — `gojira.listRecentOperations` on any instance shows the fleet's history; entries are stamped with the writing instance. Revert still requires the owning surface. |
+| Operation journal | **Shared** — `gojira.readJournal` on any instance shows the fleet's history; entries are stamped with the writing instance. Revert still requires the owning surface. |
 | Rate limit | **Pooled.** `RATE_LIMIT_PER_USER` is per-account in the shared Redis: 60 means 60/min for the whole fleet. Atlassian's real limits are per-user, so pooling is honest; raise it if profiles starve each other. |
 | Usage metrics | **Merged.** `/metrics/usage` on any instance reports the union. |
 | Audit stream | Per-instance target; every record carries `instance`. The org profile keeps a separate `GOJIRA_ORG_ADMIN_AUDIT_LOG_TARGET`. |

@@ -19,8 +19,8 @@ TTLs and types are exact; sizes are typical.
 | `apitoken:<accountId>` | String (base64) | None (manual revoke) | **AES-256-GCM** | Per-user Atlassian API token side-channel. |
 | `token_refresh_lock:<accountId>` | String (UUID) | 10 sec | none | Distributed lock for the upstream refresh path. CAD release via Lua. |
 | `ratelimit:<accountId>` | Hash | 120 sec | none | Token-bucket: `tokens`, `last_refill_ms`, `reset_floor_until_ms`. |
-| `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible, `instance` (the writing instance's `GOJIRA_INSTANCE_NAME`; absent on pre-upgrade entries). |
-| `op_journal_idx:<accountId>` | Sorted set (score = completedAt ms) | same | none | Index for `gojira.listRecentOperations`. |
+| `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible, `instance` (the writing instance's `GOJIRA_INSTANCE_NAME`; absent on pre-upgrade entries). `tool` is the collapsed tool name; for op-parameterized tools `request` carries a flat top-level `op` naming the operation (`commit` is stripped). Entries older than the CRUD collapse carry a pre-collapse tool name and no `op` — see [operation journal](../architecture/operation-journal.md) for how those still resolve. |
+| `op_journal_idx:<accountId>` | Sorted set (score = completedAt ms) | same | none | Index for `gojira.readJournal(op: "listRecentOperations")`. |
 | `assets_workspace:<cloudId>` | String | 24 hours | none | Cached Assets workspaceId per cloud site. |
 | `metrics:calls:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Successful tool calls per tool/account/UTC day. Written fire-and-forget from the tool wrapper; read by `GET /metrics/usage`. |
 | `metrics:errors:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Failed tool calls, same layout as `metrics:calls:*`. |

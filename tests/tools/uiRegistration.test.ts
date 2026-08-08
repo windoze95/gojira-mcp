@@ -64,6 +64,7 @@ const readDef = defineTool({
   description: "read",
   group: "utility",
   authMethod: "none",
+  readOnly: true,
   handler: async () => ({ items: [] }),
 });
 
@@ -85,7 +86,7 @@ describe("registerWrappedTool — MCP metadata", () => {
     });
   });
 
-  it("annotates read-verb tools as read-only", () => {
+  it("annotates explicitly read-only tools", () => {
     const { config } = capture(readDef);
     expect(config.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
   });
@@ -95,9 +96,9 @@ describe("registerWrappedTool — MCP metadata", () => {
     expect(config.annotations).toBeUndefined();
   });
 
-  it("explicit readOnly:true wins over a non-read leaf verb", () => {
+  it("explicit readOnly:true annotates regardless of the leaf verb", () => {
     const def = defineTool({
-      name: "test.exportThing", // 'export' misses the leaf regex
+      name: "test.exportThing",
       description: "read via explicit flag",
       group: "utility",
       authMethod: "none",
@@ -108,29 +109,16 @@ describe("registerWrappedTool — MCP metadata", () => {
     expect(config.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
   });
 
-  it("explicit readOnly:false suppresses the leaf-verb inference", () => {
+  it("leaves flag-less non-destructive tools unannotated — annotations are purely flag-driven", () => {
     const def = defineTool({
-      name: "test.listButActuallyMutates",
-      description: "misleading leaf verb, corrected by the flag",
+      name: "test.listButUnflagged", // a read-looking leaf earns NOTHING without the flag
+      description: "no flag, no hint",
       group: "utility",
       authMethod: "none",
-      readOnly: false,
       handler: async () => ({ ok: true }),
     });
     const { config } = capture(def);
     expect(config.annotations).toBeUndefined();
-  });
-
-  it("collapsed read-leaf verbs annotate read-only via the regex fallback", () => {
-    const def = defineTool({
-      name: "test.readThings", // the collapse's `.read*` leaf pattern
-      description: "read",
-      group: "utility",
-      authMethod: "none",
-      handler: async () => ({ items: [] }),
-    });
-    const { config } = capture(def);
-    expect(config.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
   });
 
   it("declares the output envelope schema on every tool", () => {
