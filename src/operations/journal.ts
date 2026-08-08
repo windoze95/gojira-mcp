@@ -8,6 +8,12 @@ export interface JournalEntry {
   opId: string;
   accountId: string;
   tool: string;
+  /**
+   * GOJIRA_INSTANCE_NAME of the instance that journaled the op. Absent on
+   * entries written before the field existed. Split-surface deployments share
+   * one journal, so this is how reverts name the owning instance.
+   */
+  instance?: string;
   cloudId: string | null;
   target: { kind: string; id?: string; key?: string; name?: string } & Record<string, unknown>;
   before: unknown;
@@ -40,6 +46,8 @@ export class OperationJournal {
   constructor(
     private readonly redis: RedisType,
     private readonly ttlDays: number,
+    /** Stamped into every entry this process writes; optional for back-compat. */
+    private readonly instanceName?: string,
   ) {}
 
   private journalKey(accountId: string, opId: string): string {
@@ -104,6 +112,7 @@ export class OperationJournal {
       outcome: "pending",
       revertible: false,
     };
+    if (this.instanceName) entry.instance = this.instanceName;
     if (args.revertHint) entry.revertHint = args.revertHint;
     const ttl = this.ttlSeconds();
     const nowMs = Date.parse(now);
@@ -137,6 +146,7 @@ export class OperationJournal {
       outcome: args.outcome,
       revertible: args.revertible && args.outcome === "success",
     };
+    if (this.instanceName) entry.instance = this.instanceName;
     if (args.revertHint) entry.revertHint = args.revertHint;
     if (args.error) {
       entry.errorCode = args.error.code;

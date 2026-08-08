@@ -161,6 +161,7 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
     const status = redisOk ? 200 : 503;
     res.status(status).json({
       status: redisOk ? "ok" : "degraded",
+      instance: config.instanceName,
       uptime: process.uptime(),
       redis: redisOk ? "ok" : "fail",
       duration_ms: Date.now() - start,
@@ -198,7 +199,7 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
     mcpAuthRouter({
       provider: oauthProvider,
       issuerUrl,
-      resourceName: "gojira-mcp",
+      resourceName: config.instanceName,
     }),
   );
 
@@ -211,7 +212,7 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
     windowSec: 60,
   });
   const audit = buildAuditSink(config);
-  const journal = new OperationJournal(redis, config.journal.ttlDays);
+  const journal = new OperationJournal(redis, config.journal.ttlDays, config.instanceName);
   const tokenRefresher = new TokenRefresher(redis, config);
   const apiTokenStore = new ApiTokenStore(redis, config.tokenEncryptionKey);
   const orgAdminVerifier = new OrgAdminVerifier(redis, config);
@@ -229,7 +230,7 @@ export function createApp(config: AppConfig, redis: RedisType): Express {
   }
 
   async function createMcpSession(req: Request, _res: Response): Promise<SessionEntry> {
-    const server = new McpServer({ name: "gojira-mcp", version: "0.1.0" });
+    const server = new McpServer({ name: config.instanceName, version: "0.1.0" });
     const auth = req.auth;
     const clientId = auth?.clientId ?? "unknown";
     // Must precede registerSessionTools — it wraps registerTool, so only tools
