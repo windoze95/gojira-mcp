@@ -31,7 +31,7 @@ describe("op-level revert coverage (manifest-driven)", () => {
   it("every tool#op reverter key resolves to a live tool and a live op", () => {
     const dead: string[] = [];
     for (const key of reverters.names()) {
-      if (!key.includes("#")) continue; // bare names covered by revertCoverage.test.ts
+      if (!key.includes("#")) continue; // bare keys checked below
       const [tool, op] = key.split("#");
       const def = byName.get(tool);
       if (!def || !def.ops?.some((o) => o.op === op)) dead.push(key);
@@ -39,9 +39,23 @@ describe("op-level revert coverage (manifest-driven)", () => {
     expect(dead, `Reverters keyed to nonexistent tool#op: ${dead.join(", ")}`).toEqual([]);
   });
 
-  it("admin_org op tools register no reverters and claim no revertibility", () => {
-    for (const t of opTools.filter((t) => t.group === "admin_org")) {
-      for (const op of t.ops!) {
+  it("bare-name reverter keys are exactly the revertible single-op keepers", () => {
+    // The only tools outside the op system that journal revertible:true. A key
+    // appearing here that isn't in this set is dead; one missing from the
+    // registry is a keeper whose revert promise silently broke.
+    const expected = ["automation.createRuleFromTemplate", "confluence.setContentRestrictions", "projects.delete"];
+    const bare = reverters
+      .names()
+      .filter((k) => !k.includes("#"))
+      .sort();
+    expect(bare).toEqual(expected);
+    for (const name of expected) expect(byName.has(name), `${name} missing from catalog`).toBe(true);
+  });
+
+  it("admin_org tools — op or keeper — register no reverters and claim no revertibility", () => {
+    for (const t of tools.filter((t) => t.group === "admin_org")) {
+      expect(reverters.has(t.name), t.name).toBe(false);
+      for (const op of t.ops ?? []) {
         expect(op.claimsRevertible, `${t.name}#${op.op}`).toBe(false);
         expect(reverters.has(`${t.name}#${op.op}`), `${t.name}#${op.op}`).toBe(false);
       }

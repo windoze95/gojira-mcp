@@ -45,7 +45,8 @@ gojira-mcp/
 │   │   └── dryRun.ts                  # commit-positive consent helpers (D5)
 │   ├── operations/
 │   │   ├── journal.ts                 # operation journal (D2)
-│   │   └── revert.ts                  # reverter registry + assertRevertible
+│   │   ├── revert.ts                  # reverter registry + assertRevertible
+│   │   └── legacyAliases.ts           # pre-collapse name → tool+op; canonical keys
 │   ├── redis/
 │   │   └── client.ts                  # ioredis wrapper with retry/reconnect
 │   ├── utils/
@@ -58,22 +59,27 @@ gojira-mcp/
 │       ├── registry.ts                # filterTools, registerSessionTools
 │       ├── wrapHandler.ts             # registerWrappedTool (per-call wrapper)
 │       └── defs/
-│           ├── defineTool.ts          # author-facing helper
+│           ├── defineTool.ts          # author-facing helper (single-op tools)
+│           ├── defineOpTool.ts        # op-parameterized tools: merged schema,
+│           │                          #   per-op strict validation + dispatch,
+│           │                          #   request.op injection, reverter/alias
+│           │                          #   registration, machine op manifest
 │           ├── index.ts               # allTools() aggregator
-│           ├── utility.ts             # gojira.* (7)
-│           ├── jsm.ts                 # jsm.* (16)
-│           ├── forms.ts               # forms.* (8)
-│           ├── assets.ts              # assets.* (23)
-│           ├── automation.ts          # automation.* (11)
-│           ├── customfields.ts        # customfields.* (8)
-│           ├── projects.ts            # projects.* read+create+archive (5)
-│           ├── deleteProjects.ts      # projects.deleteJiraProject (1, isolated group)
-│           ├── schemes.ts             # schemes.* (20)
-│           ├── workflows.ts           # workflows.* (11)
-│           ├── confluence.ts          # confluence.* (10)
-│           ├── agile.ts               # agile.* (8)
-│           ├── filtersDashboards.ts   # filters.* + dashboards.* (10)
-│           └── orgAdmin.ts            # orgAdmin.* (17)
+│           │                          # counts below are `tools (ops)`
+│           ├── utility.ts             # gojira.* — 6 (7)
+│           ├── jsm.ts                 # jsm.* — 4 (16)
+│           ├── forms.ts               # forms.* — 3 (8)
+│           ├── assets.ts              # assets.* — 7 (23)
+│           ├── automation.ts          # automation.* — 6 (11)
+│           ├── customfields.ts        # customfields.* — 3 (8)
+│           ├── projects.ts            # projects.* read+create+archive — 2 (5)
+│           ├── deleteProjects.ts      # projects.delete — 1 (isolated group)
+│           ├── schemes.ts             # schemes.* — 6 (20)
+│           ├── workflows.ts           # workflows.* — 4 (11)
+│           ├── confluence.ts          # confluence.* — 5 (10)
+│           ├── agile.ts               # agile.* — 2 (8)
+│           ├── filtersDashboards.ts   # filters.* + dashboards.* — 6 (10)
+│           └── orgAdmin.ts            # orgAdmin.* — 6 (17)
 └── tests/
     ├── helpers/
     │   └── redis.ts                   # ioredis-mock helper for unit tests
@@ -116,9 +122,21 @@ src/tools/registry.ts ──► src/tools/defs/* ──► src/atlassian/client.
      src/atlassian/errors.ts
 ```
 
-No circular imports. `defs/utility.ts` lazy-imports `defs/index.ts` for
-the `gojira.listEnabledTools` tool — the only place that pattern
-appears.
+No circular imports. `defs/utility.ts` is the only module that uses the
+lazy-import pattern, and it does so twice, both inside handlers so the cycle
+never forms at module load:
+
+- `gojira.listEnabledTools` imports `defs/index.ts` to enumerate the catalog.
+- `gojira.revertOperation` imports `defs/index.ts` **and**
+  `operations/legacyAliases.ts` for its group gate — it resolves the journal
+  entry's tool (through the alias map, for pre-collapse entries) back to a def
+  so it can require the *original* tool's permission group rather than
+  `utility`.
+
+`defineOpTool.ts` imports `operations/revert.ts` and
+`operations/legacyAliases.ts` eagerly; both are leaf modules under
+`src/operations/` with no dependency back on `src/tools/`, so registration at
+module load is safe.
 
 ## File-naming conventions
 
@@ -127,8 +145,15 @@ appears.
   suffix.
 - Each tool file under `defs/` exports a single named function returning
   an `AnyToolDef[]`: e.g. `export const customFieldTools = (): AnyToolDef[] => [...]`.
-- Reverter registrations live at the bottom of the same file as the
-  tool definition: `reverters.register("<tool name>", async (entry, anyCtx) => {...})`.
+- `defineOpTool(...)` must be called at **module** level — a `const` beside
+  that exported function, never inside it. The factory registers reverters and
+  legacy aliases as side effects, and both registries reject a second,
+  different registration under the same key, which is exactly what a per-call
+  invocation produces.
+- Reverters for op tools are declared inline as the op's `revert:` field;
+  `defineOpTool` registers them under `<tool>#<op>`. The three single-op tools
+  that still have one register it by hand at the bottom of their own file:
+  `reverters.register("<tool name>", async (entry, anyCtx) => {...})`.
 
 ## Build artefacts
 

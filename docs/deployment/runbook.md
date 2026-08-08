@@ -89,7 +89,7 @@ Suspected credential abuse or a runaway client:
    credentials are useless immediately.
 3. **Cut everyone**: rotate `TOKEN_ENCRYPTION_KEY` (all bound credentials
    unreadable at once) or delete the Redis volume.
-4. **Audit**: the journal (`gojira.listRecentOperations` / `getOperation`) plus the
+4. **Audit**: the journal (`gojira.readJournal`, ops `listRecentOperations` / `getOperation`) plus the
    audit log stream reconstruct who did what, with before/after snapshots.
    Mechanically revertible operations can be undone via
    `gojira.revertOperation`.

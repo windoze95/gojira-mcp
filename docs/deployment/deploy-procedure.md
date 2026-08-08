@@ -204,7 +204,7 @@ the allowlist):
 + GOJIRA_ENABLED_GROUPS=utility,read_projects,write_projects,delete_projects,...
 ```
 
-Restart. New sessions register `projects.deleteJiraProject`. Existing
+Restart. New sessions register `projects.delete`. Existing
 sessions don't pick it up until they call `initialize` again.
 
 ## Step 10 — Add `admin_org` (optional)

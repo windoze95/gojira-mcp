@@ -1,11 +1,12 @@
 # Testing
 
-vitest with `v8` coverage. 66 tests across 13 files at the time of
+vitest with `v8` coverage. 145 tests across 24 files at the time of
 writing — covering encryption, OAuth provider rotation + reuse detection,
 registered-client storage, operation journal, rate limiter with NearLimit
 feedback, Atlassian error mapping and retry/backoff, dry-run consent,
 registry filtering with operator-floor, the org-admin allowlist gate,
-revert context + coverage, and site-pinning enforcement.
+op-tool construction and dispatch, revert context/scope/coverage, and
+site-pinning enforcement.
 
 Live-tenant coverage is a **separate** suite: `npm run e2e` (see
 [battle-testing.md](battle-testing.md)).
@@ -39,8 +40,8 @@ Coverage reports land in `coverage/` (HTML, lcov, text).
 
 ## What's covered
 
-The 13 test files target the safety-critical paths called out in the
-project's design properties:
+Each safety-critical path called out in the project's design properties has
+a test that owns it:
 
 | Property | Test file |
 |---|---|
@@ -55,8 +56,36 @@ project's design properties:
 | Dry-run + JSON Patch generator | `tests/consent/dryRun.test.ts` |
 | Registry filtering — operator allowlist (`GOJIRA_ENABLED_GROUPS`) and admin_org gate | `tests/tools/registry.test.ts` |
 | `oauth_or_api_token` credential resolution + client-factory tenant guard | `tests/tools/revertContext.test.ts` |
-| Every `revertible` tool has a registered reverter (and vice versa) | `tests/tools/revertCoverage.test.ts` |
+| Op-tool schema merge, build-time guards, dispatch, `request.op` injection | `tests/tools/defineOpTool.test.ts` |
+| Every op that claims revertibility has a reverter, and no dead keys | `tests/tools/opRevertCoverage.test.ts` |
+| Revert demands the *original* tool's group, incl. via the legacy alias map | `tests/tools/revertScope.test.ts` |
 | Site pinning resolveCloudId | `tests/tools/sitePinning.test.ts` |
+
+### Revert coverage is manifest-driven, not source-walked
+
+The old `tests/tools/revertCoverage.test.ts` read the tool `defs/` sources and
+regexed for `revertible: true` / `reverters.register(...)` pairs. That is gone.
+It could only see literals in source text, so it went blind the moment an op's
+revertibility became a manifest field rather than a line of code, and it had no
+way to express `tool#op` keys at all.
+
+`tests/tools/opRevertCoverage.test.ts` replaces it by asserting against the
+machine truth `defineOpTool` already builds — the per-tool op manifest
+(`def.ops`), the reverter registry, and the legacy alias map:
+
+- every op with `claimsRevertible` has a reverter registered under `tool#op`;
+- every `tool#op` key resolves to a live tool *and* a live op — no dead keys;
+- the bare (non-`#`) keys are exactly the three revertible single-op keepers:
+  `automation.createRuleFromTemplate`, `confluence.setContentRestrictions`,
+  `projects.delete`. One extra is dead; one missing is a keeper whose revert
+  promise silently broke;
+- `admin_org` tools register no reverters and claim no revertibility;
+- every legacy alias points at a live tool and op, and no alias shadows a live
+  tool name (which would make canonicalization ambiguous);
+- op tools stay homogeneous — all-destructive or all-read — and annotate to
+  match.
+
+Nothing here parses source, so it stays true as the defs are refactored.
 
 ## What's NOT covered by unit tests
 
@@ -94,7 +123,11 @@ recommend:
 - `npm run typecheck`
 - `npm test`
 - `npm run docs:tools && git diff --exit-code docs/tools/catalog.md`
-  (catches "added a tool, forgot to regenerate")
+  (catches "added a tool or an op, forgot to regenerate"). The generated file
+  ends with the **Legacy name map** appendix — the pre-collapse → current
+  name table, emitted from the live alias registry — so the same gate also
+  catches a legacy alias added, dropped, or repointed without the
+  audit/SIEM migration table being updated to match.
 - `npm run e2e` is safe to add — the suites skip themselves when the
   `E2E_*` env is absent — but it only proves anything on a runner that
   holds live sandbox credentials.

@@ -103,7 +103,7 @@ right `AtlassianClient` for the tool. The factories returned on `ctx.client`:
 
 ## Missing-token error path
 
-A tool requiring an API token (e.g. `jsm.listServiceDesks`) when the user
+A tool requiring an API token (e.g. `jsm.readServiceDesk`) when the user
 hasn't bound one returns:
 
 ```json

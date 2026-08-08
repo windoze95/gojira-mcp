@@ -18,9 +18,14 @@ hosts. Notably **not** Claude Code — CLI/IDE chat stays text-only.
 | Template | Attached to | What it does |
 |---|---|---|
 | `ui://gojira/confirm-op.html` | **every destructive tool** (default; see below) | Renders the commit-positive dry-run as a diff card — RFC 6902 patch rows and/or before/after panes, target line, danger styling for permanent deletes — with a **Commit** button that re-invokes the same tool with the original arguments plus `commit: true`. Also renders committed results and error envelopes. |
-| `ui://gojira/journal.html` | `gojira.listRecentOperations`, `gojira.getOperation` | Operation timeline with expandable detail (client-computed before/after patch) and a dry-run-first **Revert** flow for revertible entries. |
+| `ui://gojira/journal.html` | `gojira.readJournal` (ops `listRecentOperations`, `getOperation`) | Operation timeline with expandable detail (client-computed before/after patch) and a dry-run-first **Revert** flow for revertible entries. |
 | `ui://gojira/aql-table.html` | `assets.aqlSearch` | Results table with dynamic attribute columns (from `objectTypeAttributes`), a column picker, per-page sort, and Prev/Next paging via re-invocation. |
-| `ui://gojira/automation-rule.html` | `automation.listAutomationRules`, `automation.getAutomationRule` | Rule list (cursor paging) and trigger → conditions/branches → actions tree with raw value expanders. |
+| `ui://gojira/automation-rule.html` | `automation.readRule` (ops `listAutomationRules`, `getAutomationRule`) | Rule list (cursor paging) and trigger → conditions/branches → actions tree with raw value expanders. |
+
+A template attaches to the whole collapsed tool, not to one op, so one view
+renders every op it declares — the journal template handles both the list and
+the single-entry shape, and `automation.readRule` likewise. Both are read-only
+op tools; `assets.aqlSearch` stayed a single-op tool through the collapse.
 
 ## What they look like
 
@@ -35,7 +40,7 @@ Dry-run with an RFC 6902 patch table; Commit re-invokes the tool with
 ![Confirm card for a permission-scheme update](../assets/ui/confirm-permission-scheme.png)
 
 Delete-shaped dry-runs render the before-state and the mode. The message text
-comes from the tool, so `projects.deleteJiraProject` distinguishes trash from
+comes from the tool, so `projects.delete` distinguishes trash from
 permanent:
 
 ![Confirm card for a permanent project delete, flagged NO UNDO](../assets/ui/confirm-delete-permanent.png)
@@ -50,8 +55,9 @@ After committing, and on an error envelope:
 
 ![Journal timeline](../assets/ui/journal-timeline.png)
 
-Row drill-in fetches the full entry via `gojira.getOperation` and diffs
-before/after locally with the same algorithm as `src/consent/jsonPatch.ts`:
+Row drill-in fetches the full entry via
+`gojira.readJournal({ op: "getOperation", op_id })` and diffs before/after
+locally with the same algorithm as `src/consent/jsonPatch.ts`:
 
 ![Expanded journal entry with the applied patch](../assets/ui/journal-detail.png)
 
@@ -82,13 +88,23 @@ transparent body follows the host rather than the OS preference:
 - **Tool linkage** — `src/tools/wrapHandler.ts` adds, per tool:
   `outputSchema` (the loose `{success, result?, error?}` envelope),
   `structuredContent` on every result, truthful `annotations`
-  (`destructiveHint` from `def.destructive`, `readOnlyHint` from a
-  conservative read-verb allowlist), and — when UI is active —
-  `_meta.ui.resourceUri` plus the deprecated flat `ui/resourceUri` alias for
-  older hosts.
+  (`destructiveHint` from `def.destructive`, `readOnlyHint` from an explicit
+  `def.readOnly`, nothing otherwise — purely flag-driven, no name sniffing),
+  and — when UI is active — `_meta.ui.resourceUri` plus the deprecated flat
+  `ui/resourceUri` alias for older hosts.
 - **Template selection** — `src/ui/appResources.ts#resolveUiResourceUri`:
   explicit `def.ui.resourceUri` wins; otherwise `destructive: true` defaults
-  to the confirm card; otherwise no UI.
+  to the confirm card; otherwise no UI. Because the flag is per *tool*,
+  `defineOpTool` refuses to build a tool that mixes destructive and read ops —
+  otherwise the confirm card would attach to read results too.
+- **Ops in view callbacks** — `op` is a required input on a collapsed tool, so
+  a view calling back through `tools/call` must pass it explicitly. The
+  journal view sends `{ op: "listRecentOperations", ... }` on refresh and
+  `{ op: "getOperation", op_id }` on drill-in; the automation view sends
+  `{ op: "getAutomationRule", ruleId }` and, when paging, spreads the original
+  tool input so the inbound `op` rides along with the new `cursor`. Calls to
+  single-op tools (`assets.aqlSearch`, `gojira.revertOperation`) carry no
+  `op`.
 - **Resource serving** — `registerUiResources` (called from
   `registerSessionTools`) registers only the templates actually referenced by
   the session's registered tools, so a deployment without `read_assets` never

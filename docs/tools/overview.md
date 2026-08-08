@@ -1,26 +1,37 @@
 # Tools overview
 
-gojira-mcp exposes **155 tools** spread across **23 permission groups**
-(including `utility`, which every deployment should list explicitly —
-nothing auto-injects it). Each tool is defined declaratively via
-`defineTool` in `src/tools/defs/*.ts`.
+gojira-mcp exposes **61 op-parameterized tools carrying 155 operations**,
+spread across **23 permission groups** (including `utility`, which every
+deployment should list explicitly — nothing auto-injects it). Most tools
+bundle 2-7 related operations behind a required `op` enum field (built via
+`defineOpTool`); single-purpose tools use plain `defineTool`. Definitions
+live in `src/tools/defs/*.ts`.
 
 ## At a glance
 
-| Doc | Theme | Tool count | Tool names start with |
+| Doc | Theme | Tools (operations) | Tool names start with |
 |---|---|---|---|
-| [Daily admin](daily-admin.md) | JSM, Assets, Automation, Custom fields, Projects (read/create/archive) | ~71 | `jsm.`, `forms.`, `assets.`, `automation.`, `customfields.`, `projects.` |
-| [Schemes and workflows](schemes-and-workflows.md) | Schemes, workflow CRUD + publish, Confluence admin, project deletion | ~42 | `schemes.`, `workflows.`, `confluence.`, `projects.deleteJiraProject` |
-| [Agile and views](agile-and-views.md) | Boards, sprints, epics, filters, dashboards | ~18 | `agile.`, `filters.`, `dashboards.` |
-| [Org admin](org-admin.md) | `admin.atlassian.com` (gated separately) | 17 | `orgAdmin.` |
-| [Utility](utility.md) (always available) | Health, identity, journal, side-channel binding | 7 | `gojira.` |
+| [Daily admin](daily-admin.md) | JSM, Forms, Assets, Automation, Custom fields, Projects (read/create/archive) | 26 (~90 ops) | `jsm.`, `forms.`, `assets.`, `automation.`, `customfields.`, `projects.` |
+| [Schemes and workflows](schemes-and-workflows.md) | Schemes, workflows + publish, Confluence admin, project deletion | 15 (~42 ops) | `schemes.`, `workflows.`, `confluence.`, `projects.delete` |
+| [Agile and views](agile-and-views.md) | Boards, sprints, epics, filters, dashboards | 8 (18 ops) | `agile.`, `filters.`, `dashboards.` |
+| [Org admin](org-admin.md) | `admin.atlassian.com` (gated separately) | 6 (17 ops) | `orgAdmin.` |
+| [Utility](utility.md) | Health, identity, journal, side-channel binding | 6 (7 ops) | `gojira.` |
 
-Counts are approximate; see the [catalog](catalog.md) for the exact
-list.
+See the [catalog](catalog.md) for the exact per-op listing.
 
 ## Tool naming convention
 
-All tool names are dot-separated: `<group_prefix>.<operation>`.
+Tool names are dot-separated `<module>.<verb>` following the collapse's
+read/manage/delete pattern: `.read*` tools are pure reads, `.manage*`
+tools mutate (commit-positive consent), `.delete*` tools carry the
+delete-class operations — always their own tool, never folded into
+manage, so a profile can exclude deletion at registration time. A few
+keepers retain their pre-collapse names (`assets.aqlSearch`,
+`gojira.bindApiToken`, `workflows.validateCreateWorkflow`, ...). The
+operation WITHIN a tool is selected by its required `op` field; op values
+are the pre-collapse leaf verbs (`createObjectSchema`, `listQueues`, ...),
+and the [catalog appendix](catalog.md#legacy-name-map-pre-collapse--current)
+maps every pre-collapse tool name to its current tool + op.
 
 | Prefix | Permission groups |
 |---|---|
@@ -48,13 +59,17 @@ Every tool definition carries:
 
 ```ts
 interface ToolDefinition {
-  name: string;                       // dot-prefixed, e.g. "customfields.createCustomField"
-  description: string;                // surfaces in client UIs
+  name: string;                       // dot-prefixed, e.g. "customfields.manage"
+  description: string;                // prose that ENUMERATES the ops — the model's selection index
   group: PermissionGroup;             // e.g. "write_customfields"
   authMethod: "oauth" | "api_token" | "oauth_or_api_token" | "org_admin" | "none";
-  destructive: boolean;               // true → commit-positive consent enforced
+  destructive: boolean;               // true → commit-positive consent enforced (all ops)
   needsCloudId: boolean;              // true → resolveCloudId applied
-  inputSchema: ZodObject;             // converted to JSON schema for the MCP client
+  readOnly?: boolean;                 // explicit read-only marker — annotations are purely flag-driven
+  ops?: OpManifestEntry[];            // op manifest (op tools only): per-op description,
+                                      //   destructive, legacyName, input shape, revertibility claim
+  inputSchema: ZodObject;             // flat merge: required `op` enum + per-op fields (optional),
+                                      //   strictly re-validated per op at dispatch
   handler: (input, ctx) => Promise<unknown>;
 }
 ```
@@ -92,33 +107,33 @@ Defense in depth: the dispatch wrapper inside `wrapHandler` re-checks
 the allowlist before each tool call, so a leaked tool can't actually
 fire.
 
-## Adding a tool
+## Adding an operation or tool
 
-See [adding-a-tool.md](../development/adding-a-tool.md) for the recipe:
-
-1. Pick the permission group → import file under `src/tools/defs/`
-2. Call `defineTool({ name, group, authMethod, destructive,
-   needsCloudId, input, handler })`
-3. For destructive ops: snapshot `before`, build a dry-run, wrap in
-   `ctx.journalOp`
-4. For revertible ops: register a reverter at the bottom of the file
-5. Add to `tests/` if it carries a complex code path (most simple
-   pass-throughs don't need a dedicated test)
-6. `npm run docs:tools` to refresh the catalog
+See [adding-a-tool.md](../development/adding-a-tool.md) for the full
+recipe. In short: extend an existing collapsed tool with a `defineOp`
+spec (op name, one-line description, real-required-ness input shape,
+per-op `revert` where applicable) when the operation fits its family and
+the tool stays within the 5-7 op cap; create a new tool (read/manage/
+delete pattern) otherwise. `npm run docs:tools` refreshes the catalog —
+CI fails if it drifts — and `tests/tools/opRevertCoverage.test.ts`
+enforces manifest-driven revert coverage.
 
 ## Practical surface size
 
-The complete tool set (155) is too large for any single frontier model
-to dispatch with maximum accuracy. To keep model behaviour sharp:
+The collapse (155 per-endpoint tools → 61) put every deployment shape
+under the tool-count thresholds where model selection degrades, and the
+split-surface fleet keeps every *connected* surface under ~30:
 
 - **Tighten the allowlist:** set `GOJIRA_ENABLED_GROUPS` to exactly the
-  groups this deployment needs. For a read-only audit deployment, list
-  only `utility` + the `read_*` groups — model only sees ~80 tools.
-- **One deployment per use-case:** rather than running one big instance
-  with everything enabled, run a JSM-only instance, a workflow-admin
-  instance, etc. Smaller surface = sharper tool selection.
-- **Use `gojira.listEnabledTools`** at runtime to verify the surface
-  matches what the use case needs.
+  groups this deployment needs. A read-only audit deployment (`utility`
+  + the `read_*` groups) advertises 26 tools.
+- **One deployment per use-case:** the split-surface fleet
+  ([README Pattern 8](../../README.md#pattern-8--split-surface-fleet--26262119-12-tools),
+  [profiles guide](../deployment/profiles.md)) runs one instance per
+  workflow batch — 26/26/21/19/12 tools per profile.
+- **Use `gojira.listEnabledTools`** at runtime (with
+  `available_only: true` for just this instance's surface) to verify the
+  surface matches the use case; each tool row lists its `ops`.
 
 ## See also
 

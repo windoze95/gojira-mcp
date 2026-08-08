@@ -2152,3 +2152,153 @@ Set or replace an org policy.
   - `commit`: boolean
 
 ---
+
+## Legacy name map (pre-collapse → current)
+
+_Generated from the live legacy-alias registry. Audit records and journal entries written before the CRUD collapse carry the pre-collapse names on the left; they resolve to the current tool (and op) on the right._
+
+| Pre-collapse tool | Now |
+|---|---|
+| `agile.createSprint` | `agile.manageSprint` · op `createSprint` |
+| `agile.getBoard` | `agile.read` · op `getBoard` |
+| `agile.getEpic` | `agile.read` · op `getEpic` |
+| `agile.getSprint` | `agile.read` · op `getSprint` |
+| `agile.listBoards` | `agile.read` · op `listBoards` |
+| `agile.listEpics` | `agile.read` · op `listEpics` |
+| `agile.listSprints` | `agile.read` · op `listSprints` |
+| `agile.updateSprint` | `agile.manageSprint` · op `updateSprint` |
+| `assets.createObject` | `assets.manageObject` · op `createObject` |
+| `assets.createObjectSchema` | `assets.manageSchema` · op `createObjectSchema` |
+| `assets.createObjectType` | `assets.manageSchema` · op `createObjectType` |
+| `assets.createObjectTypeAttribute` | `assets.manageSchema` · op `createObjectTypeAttribute` |
+| `assets.deleteObject` | `assets.delete` · op `deleteObject` |
+| `assets.deleteObjectSchema` | `assets.delete` · op `deleteObjectSchema` |
+| `assets.deleteObjectType` | `assets.delete` · op `deleteObjectType` |
+| `assets.deleteObjectTypeAttribute` | `assets.delete` · op `deleteObjectTypeAttribute` |
+| `assets.exportAssetSchema` | `assets.readSchema` · op `exportAssetSchema` |
+| `assets.getObject` | `assets.readObject` · op `getObject` |
+| `assets.getObjectHistory` | `assets.readObject` · op `getObjectHistory` |
+| `assets.getObjectReferences` | `assets.readObject` · op `getObjectReferences` |
+| `assets.getObjectSchema` | `assets.readSchema` · op `getObjectSchema` |
+| `assets.getObjectType` | `assets.readSchema` · op `getObjectType` |
+| `assets.getObjectTypeAttributes` | `assets.readSchema` · op `getObjectTypeAttributes` |
+| `assets.listObjectSchemas` | `assets.readSchema` · op `listObjectSchemas` |
+| `assets.listObjectTypes` | `assets.readSchema` · op `listObjectTypes` |
+| `assets.updateObject` | `assets.manageObject` · op `updateObject` |
+| `assets.updateObjectSchema` | `assets.manageSchema` · op `updateObjectSchema` |
+| `assets.updateObjectType` | `assets.manageSchema` · op `updateObjectType` |
+| `assets.updateObjectTypeAttribute` | `assets.manageSchema` · op `updateObjectTypeAttribute` |
+| `automation.createAutomationRule` | `automation.manageRule` · op `createAutomationRule` |
+| `automation.deleteAutomationRule` | `automation.delete` |
+| `automation.disableAutomationRule` | `automation.manageRule` · op `disableAutomationRule` |
+| `automation.enableAutomationRule` | `automation.manageRule` · op `enableAutomationRule` |
+| `automation.getAutomationRule` | `automation.readRule` · op `getAutomationRule` |
+| `automation.getAutomationTemplate` | `automation.readTemplate` · op `getAutomationTemplate` |
+| `automation.listAutomationRules` | `automation.readRule` · op `listAutomationRules` |
+| `automation.searchAutomationTemplates` | `automation.readTemplate` · op `searchAutomationTemplates` |
+| `automation.updateAutomationRule` | `automation.manageRule` · op `updateAutomationRule` |
+| `confluence.createConfluenceSpace` | `confluence.manageSpace` · op `createConfluenceSpace` |
+| `confluence.deleteConfluenceSpace` | `confluence.delete` |
+| `confluence.getConfluenceSpace` | `confluence.readSpace` · op `getConfluenceSpace` |
+| `confluence.getContentRestrictions` | `confluence.readContent` · op `getContentRestrictions` |
+| `confluence.listBlueprints` | `confluence.readContent` · op `listBlueprints` |
+| `confluence.listConfluenceSpaces` | `confluence.readSpace` · op `listConfluenceSpaces` |
+| `confluence.listSpacePermissions` | `confluence.readSpace` · op `listSpacePermissions` |
+| `confluence.listTemplates` | `confluence.readContent` · op `listTemplates` |
+| `confluence.updateConfluenceSpace` | `confluence.manageSpace` · op `updateConfluenceSpace` |
+| `customfields.assignCustomFieldToProjects` | `customfields.manage` · op `assignCustomFieldToProjects` |
+| `customfields.createCustomField` | `customfields.manage` · op `createCustomField` |
+| `customfields.deleteCustomField` | `customfields.delete` |
+| `customfields.getCustomField` | `customfields.read` · op `getCustomField` |
+| `customfields.listCustomFieldContexts` | `customfields.read` · op `listCustomFieldContexts` |
+| `customfields.listCustomFields` | `customfields.read` · op `listCustomFields` |
+| `customfields.setCustomFieldOptions` | `customfields.manage` · op `setCustomFieldOptions` |
+| `customfields.updateCustomField` | `customfields.manage` · op `updateCustomField` |
+| `dashboards.createDashboard` | `dashboards.manage` · op `createDashboard` |
+| `dashboards.deleteDashboard` | `dashboards.delete` |
+| `dashboards.getDashboard` | `dashboards.read` · op `getDashboard` |
+| `dashboards.listDashboards` | `dashboards.read` · op `listDashboards` |
+| `dashboards.updateDashboard` | `dashboards.manage` · op `updateDashboard` |
+| `filters.createFilter` | `filters.manage` · op `createFilter` |
+| `filters.deleteFilter` | `filters.delete` |
+| `filters.getFilter` | `filters.read` · op `getFilter` |
+| `filters.listFilters` | `filters.read` · op `listFilters` |
+| `filters.updateFilter` | `filters.manage` · op `updateFilter` |
+| `forms.createFormTemplate` | `forms.manageTemplate` · op `createFormTemplate` |
+| `forms.deleteFormTemplate` | `forms.delete` |
+| `forms.getFormTemplate` | `forms.read` · op `getFormTemplate` |
+| `forms.getIssueFormAnswers` | `forms.read` · op `getIssueFormAnswers` |
+| `forms.getRequestTypeForm` | `forms.read` · op `getRequestTypeForm` |
+| `forms.listFormTemplates` | `forms.read` · op `listFormTemplates` |
+| `forms.listIssueForms` | `forms.read` · op `listIssueForms` |
+| `forms.updateFormTemplate` | `forms.manageTemplate` · op `updateFormTemplate` |
+| `gojira.getOperation` | `gojira.readJournal` · op `getOperation` |
+| `gojira.listRecentOperations` | `gojira.readJournal` · op `listRecentOperations` |
+| `jsm.addCustomersToOrganization` | `jsm.manage` · op `addCustomersToOrganization` |
+| `jsm.createRequestType` | `jsm.manage` · op `createRequestType` |
+| `jsm.deleteRequestType` | `jsm.delete` · op `deleteRequestType` |
+| `jsm.getQueue` | `jsm.readSupport` · op `getQueue` |
+| `jsm.getQueueIssues` | `jsm.readSupport` · op `getQueueIssues` |
+| `jsm.getRequestSla` | `jsm.readSupport` · op `getRequestSla` |
+| `jsm.getRequestType` | `jsm.readServiceDesk` · op `getRequestType` |
+| `jsm.getRequestTypeFields` | `jsm.readServiceDesk` · op `getRequestTypeFields` |
+| `jsm.getRequestTypeGroups` | `jsm.readServiceDesk` · op `getRequestTypeGroups` |
+| `jsm.getServiceDesk` | `jsm.readServiceDesk` · op `getServiceDesk` |
+| `jsm.listJsmOrganizations` | `jsm.readSupport` · op `listJsmOrganizations` |
+| `jsm.listQueues` | `jsm.readSupport` · op `listQueues` |
+| `jsm.listRequestTypes` | `jsm.readServiceDesk` · op `listRequestTypes` |
+| `jsm.listServiceDesks` | `jsm.readServiceDesk` · op `listServiceDesks` |
+| `jsm.removeCustomersFromOrganization` | `jsm.delete` · op `removeCustomersFromOrganization` |
+| `jsm.searchKnowledgeBaseArticles` | `jsm.readSupport` · op `searchKnowledgeBaseArticles` |
+| `orgAdmin.addUserToGroup` | `orgAdmin.manageGroup` · op `addUserToGroup` |
+| `orgAdmin.createGroup` | `orgAdmin.manageGroup` · op `createGroup` |
+| `orgAdmin.deactivateUser` | `orgAdmin.manageUser` · op `deactivateUser` |
+| `orgAdmin.deleteGroup` | `orgAdmin.delete` · op `deleteGroup` |
+| `orgAdmin.getGroup` | `orgAdmin.readDirectory` · op `getGroup` |
+| `orgAdmin.getOrgPolicies` | `orgAdmin.readOrg` · op `getOrgPolicies` |
+| `orgAdmin.getOrgUser` | `orgAdmin.readDirectory` · op `getOrgUser` |
+| `orgAdmin.getUserGroups` | `orgAdmin.readDirectory` · op `getUserGroups` |
+| `orgAdmin.listGroups` | `orgAdmin.readDirectory` · op `listGroups` |
+| `orgAdmin.listManagedAccounts` | `orgAdmin.readDirectory` · op `listManagedAccounts` |
+| `orgAdmin.listOrgUsers` | `orgAdmin.readDirectory` · op `listOrgUsers` |
+| `orgAdmin.listVerifiedDomains` | `orgAdmin.readOrg` · op `listVerifiedDomains` |
+| `orgAdmin.provisionUser` | `orgAdmin.manageUser` · op `provisionUser` |
+| `orgAdmin.queryAuditLog` | `orgAdmin.readOrg` · op `queryAuditLog` |
+| `orgAdmin.removeUserFromGroup` | `orgAdmin.delete` · op `removeUserFromGroup` |
+| `orgAdmin.restoreUser` | `orgAdmin.manageUser` · op `restoreUser` |
+| `projects.archiveJiraProject` | `projects.manage` · op `archiveJiraProject` |
+| `projects.createJiraProject` | `projects.manage` · op `createJiraProject` |
+| `projects.deleteJiraProject` | `projects.delete` |
+| `projects.getJiraProject` | `projects.read` · op `getJiraProject` |
+| `projects.getJiraProjectDetails` | `projects.read` · op `getJiraProjectDetails` |
+| `projects.listJiraProjects` | `projects.read` · op `listJiraProjects` |
+| `schemes.assignPermissionSchemeToProject` | `schemes.managePermission` · op `assignPermissionSchemeToProject` |
+| `schemes.createNotificationScheme` | `schemes.manageNotification` · op `createNotificationScheme` |
+| `schemes.createPermissionScheme` | `schemes.managePermission` · op `createPermissionScheme` |
+| `schemes.deleteNotificationScheme` | `schemes.delete` · op `deleteNotificationScheme` |
+| `schemes.deletePermissionScheme` | `schemes.delete` · op `deletePermissionScheme` |
+| `schemes.getFieldConfiguration` | `schemes.readConfig` · op `getFieldConfiguration` |
+| `schemes.getIssueTypeScheme` | `schemes.readConfig` · op `getIssueTypeScheme` |
+| `schemes.getNotificationScheme` | `schemes.readAccess` · op `getNotificationScheme` |
+| `schemes.getPermissionScheme` | `schemes.readAccess` · op `getPermissionScheme` |
+| `schemes.getScreen` | `schemes.readScreen` · op `getScreen` |
+| `schemes.getWorkflowScheme` | `schemes.readConfig` · op `getWorkflowScheme` |
+| `schemes.listFieldConfigurations` | `schemes.readConfig` · op `listFieldConfigurations` |
+| `schemes.listIssueTypeSchemes` | `schemes.readConfig` · op `listIssueTypeSchemes` |
+| `schemes.listNotificationSchemes` | `schemes.readAccess` · op `listNotificationSchemes` |
+| `schemes.listPermissionSchemes` | `schemes.readAccess` · op `listPermissionSchemes` |
+| `schemes.listScreens` | `schemes.readScreen` · op `listScreens` |
+| `schemes.listScreenSchemes` | `schemes.readScreen` · op `listScreenSchemes` |
+| `schemes.listWorkflowSchemes` | `schemes.readConfig` · op `listWorkflowSchemes` |
+| `schemes.updateNotificationScheme` | `schemes.manageNotification` · op `updateNotificationScheme` |
+| `schemes.updatePermissionScheme` | `schemes.managePermission` · op `updatePermissionScheme` |
+| `workflows.createWorkflow` | `workflows.manage` · op `createWorkflow` |
+| `workflows.deleteWorkflow` | `workflows.delete` |
+| `workflows.getWorkflow` | `workflows.read` · op `getWorkflow` |
+| `workflows.getWorkflowConditions` | `workflows.read` · op `getWorkflowConditions` |
+| `workflows.getWorkflowPostFunctions` | `workflows.read` · op `getWorkflowPostFunctions` |
+| `workflows.getWorkflowTransitions` | `workflows.read` · op `getWorkflowTransitions` |
+| `workflows.getWorkflowValidators` | `workflows.read` · op `getWorkflowValidators` |
+| `workflows.listWorkflows` | `workflows.read` · op `listWorkflows` |
+| `workflows.publishWorkflowSchemeDraft` | `workflows.manage` · op `publishWorkflowSchemeDraft` |
+| `workflows.updateWorkflow` | `workflows.manage` · op `updateWorkflow` |

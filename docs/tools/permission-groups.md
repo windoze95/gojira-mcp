@@ -13,31 +13,31 @@ unless it's named.
 
 ## The full list
 
-| Group | Product | Tool count | Auth | Notes |
+| Group | Product | Tools (operations) | Auth | Notes |
 |---|---|---|---|---|
-| `utility` | gojira itself | 7 | mixed | Always available when listed in the allowlist |
-| `read_projects` | Jira | 3 | oauth | List/get project admin view + details |
-| `write_projects` | Jira | 2 | oauth | Create + archive (delete is its own group) |
-| `delete_projects` | Jira | 1 | oauth | **Isolated:** omitting this doesn't omit archive/restore |
-| `read_schemes` | Jira | 13 | oauth | Permission/notification/workflow/screen/issue-type/field-config schemes — read |
-| `write_schemes` | Jira | 7 | oauth | Create/update/delete schemes + project assignments |
-| `read_workflows` | Jira | 6 | oauth | List/get workflows + transition components |
-| `write_workflows` | Jira | 5 | oauth | Create/update/delete workflows, transitions, publish |
-| `read_automation` | Jira | 5 | api_token | List/get rules, manual-rule search, rule templates |
-| `write_automation` | Jira | 6 | api_token | Create (incl. from template)/update/delete/enable/disable rules |
-| `read_customfields` | Jira | 3 | oauth | List/get fields and their contexts |
-| `write_customfields` | Jira | 5 | oauth | Create/update/delete fields, assign contexts, set options |
-| `read_filters_dashboards` | Jira | 4 | oauth | List/get filters and dashboards |
-| `write_filters_dashboards` | Jira | 6 | oauth | Create/update/delete filters and dashboards |
-| `read_agile` | Jira Software | 6 | oauth | Boards, sprints, epics — read |
-| `write_agile` | Jira Software | 2 | oauth | Create/update sprints |
-| `read_jsm_admin` | Jira Service Management | 17 | api_token | List/get for service desks, queues, SLA state, forms, etc. |
-| `write_jsm_admin` | Jira Service Management | 7 | api_token | Create/update/delete for the same surface incl. form templates |
-| `read_assets` | Assets (JSM add-on) | 10 | oauth | Read for Assets/Insight schemas, types, objects |
-| `write_assets` | Assets (JSM add-on) | 13 | oauth | Mutate Assets data and schema |
-| `read_confluence_admin` | Confluence | 6 | api_token | List/get spaces, templates, blueprints, restrictions |
-| `write_confluence_admin` | Confluence | 4 | api_token | Create/update/delete spaces, set restrictions |
-| `admin_org` | Atlassian Org (`admin.atlassian.com`) | 17 | org_admin | All org-admin ops — gated separately by `GOJIRA_ENABLE_ORG_ADMIN` |
+| `utility` | gojira itself | 6 (7 ops) | mixed | Always available when listed in the allowlist |
+| `read_projects` | Jira | 1 (3 ops) | oauth | List/get project admin view + details |
+| `write_projects` | Jira | 1 (2 ops) | oauth | Create + archive (delete is its own group) |
+| `delete_projects` | Jira | 1 (1 op) | oauth | **Isolated:** omitting this doesn't omit archive/restore |
+| `read_schemes` | Jira | 3 (13 ops) | oauth | Permission/notification/workflow/screen/issue-type/field-config schemes — read |
+| `write_schemes` | Jira | 3 (7 ops) | oauth | Create/update/delete schemes + project assignments |
+| `read_workflows` | Jira | 1 (6 ops) | oauth | List/get workflows + transition components |
+| `write_workflows` | Jira | 3 (5 ops) | oauth | Create/update/delete workflows, transitions, publish |
+| `read_automation` | Jira | 3 (5 ops) | api_token | List/get rules, manual-rule search, rule templates |
+| `write_automation` | Jira | 3 (6 ops) | api_token | Create (incl. from template)/update/delete/enable/disable rules |
+| `read_customfields` | Jira | 1 (3 ops) | oauth | List/get fields and their contexts |
+| `write_customfields` | Jira | 2 (5 ops) | oauth | Create/update/delete fields, assign contexts, set options |
+| `read_filters_dashboards` | Jira | 2 (4 ops) | oauth | List/get filters and dashboards |
+| `write_filters_dashboards` | Jira | 4 (6 ops) | oauth | Create/update/delete filters and dashboards |
+| `read_agile` | Jira Software | 1 (6 ops) | oauth | Boards, sprints, epics — read |
+| `write_agile` | Jira Software | 1 (2 ops) | oauth | Create/update sprints |
+| `read_jsm_admin` | Jira Service Management | 3 (17 ops) | api_token | List/get for service desks, queues, SLA state, forms, etc. |
+| `write_jsm_admin` | Jira Service Management | 4 (7 ops) | api_token | Create/update/delete for the same surface incl. form templates |
+| `read_assets` | Assets (JSM add-on) | 3 (10 ops) | oauth | Read for Assets/Insight schemas, types, objects |
+| `write_assets` | Assets (JSM add-on) | 4 (13 ops) | oauth | Mutate Assets data and schema |
+| `read_confluence_admin` | Confluence | 2 (6 ops) | api_token | List/get spaces, templates, blueprints, restrictions |
+| `write_confluence_admin` | Confluence | 3 (4 ops) | api_token | Create/update/delete spaces, set restrictions |
+| `admin_org` | Atlassian Org (`admin.atlassian.com`) | 6 (17 ops) | org_admin | All org-admin ops — gated separately by `GOJIRA_ENABLE_ORG_ADMIN` |
 
 Groups marked `api_token` use the per-user token bound via
 `gojira.bindApiToken`. For `read_automation`/`write_automation` the
@@ -60,8 +60,11 @@ the allowlist:
 GOJIRA_ENABLED_GROUPS=utility,read_projects,write_projects   # no delete_projects
 ```
 
-`projects.deleteJiraProject` then fails to register; every other
-`projects.*` tool stays available.
+`projects.delete` then fails to register; `projects.read` and
+`projects.manage` (create/archive) stay available. The same pattern runs
+through the whole collapsed catalog: every delete-class operation lives
+in its own `.delete` tool, so registration-time absence — not a runtime
+conditional — is what removes deletion from a surface.
 
 ## Per-deployment recommendations
 

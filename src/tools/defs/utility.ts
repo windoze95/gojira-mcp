@@ -75,6 +75,7 @@ export const utilityTools = (): AnyToolDef[] => [
     group: "utility",
     authMethod: "none",
     needsCloudId: false,
+    readOnly: true,
     handler: async (_input, ctx) => {
       const start = Date.now();
       let redis: "ok" | "fail" = "ok";
@@ -105,6 +106,7 @@ export const utilityTools = (): AnyToolDef[] => [
     group: "utility",
     authMethod: "oauth",
     needsCloudId: false,
+    readOnly: true,
     handler: async (_input, ctx) => {
       return {
         account_id: ctx.accountId,
@@ -226,6 +228,7 @@ export const utilityTools = (): AnyToolDef[] => [
     group: "utility",
     authMethod: "none",
     needsCloudId: false,
+    readOnly: true,
     input: {
       available_only: z
         .boolean()

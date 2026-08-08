@@ -1,8 +1,8 @@
 # Org admin
 
-The most dangerous surface. All 17 `admin_org` tools route through
-`api.atlassian.com/admin/v1/orgs/<orgId>/*` using a single
-**org-admin API token** (`GOJIRA_ORG_ADMIN_TOKEN`). There is no
+The most dangerous surface. All 17 `admin_org` operations — carried by 6
+tools — route through `api.atlassian.com/admin/v1/orgs/<orgId>/*` using a
+single **org-admin API token** (`GOJIRA_ORG_ADMIN_TOKEN`). There is no
 per-user delegated path — Atlassian doesn't expose one.
 
 The `admin_org` group is **disabled by default**. Operator opts in via:
@@ -43,13 +43,19 @@ at process start.
 
 ## Reverts
 
-No `admin_org` tool registers a reverter, and every mutating tool here
+No `admin_org` op registers a reverter, and every mutating op here
 journals `revertible: false`. This is deliberate:
 `gojira.revertOperation` lives in the `utility` group and is **not**
-org-admin gated, so a reverter on an `admin_org` tool would be a way to
-perform org-admin mutations without passing the gate. Mutations still
-journal `before`/`after` snapshots, and each carries a `revertHint`
-naming the inverse `admin_org` tool to call by hand (which *is* gated).
+org-admin gated, so a reverter on an `admin_org` op would be a way to
+perform org-admin mutations without passing the gate. The rule is
+enforced, not merely observed: `defineOpTool` throws at load time if an
+`admin_org` op declares a `revert`, and a coverage test asserts the whole
+group — op tools and keepers alike — registers none.
+
+Mutations still journal `before`/`after` snapshots, and each carries a
+`revertHint` naming the inverse tool **and op** to call by hand (which
+*is* gated), e.g. *"Not auto-revertible (revertOperation is not org-admin
+gated). Call orgAdmin.manageUser restoreUser with the same accountId."*
 
 ## Audit isolation
 
@@ -62,39 +68,49 @@ record carries an `org_id` field absent from other tool calls.
 All tools route through `ctx.client.admin()` (base
 `api.atlassian.com/admin/v1`). All destructive tools require
 `commit: true`. None are auto-revertible; the *undo* column names the
-inverse tool to call by hand.
+tool and op to call by hand.
 
-### Users
+### `orgAdmin.readDirectory` — read-only
 
-- `orgAdmin.listOrgUsers(cursor?)` — paged.
-- `orgAdmin.getOrgUser(accountId)`.
-- `orgAdmin.provisionUser(email, displayName, profile?)` — destructive, irreversible.
-- `orgAdmin.deactivateUser(accountId)` — destructive; undo: `orgAdmin.restoreUser`.
-- `orgAdmin.restoreUser(accountId)` — destructive; undo: `orgAdmin.deactivateUser`.
+`listOrgUsers(cursor?)`, `getOrgUser(accountId)`,
+`getUserGroups(accountId)`, `listManagedAccounts(cursor?)`,
+`listGroups(cursor?)`, `getGroup(groupId)`.
 
-### Group membership
+Cursors are opaque and **per-op**: feed a cursor back only to the same op
+that produced it.
 
-- `orgAdmin.getUserGroups(accountId)`.
-- `orgAdmin.addUserToGroup(accountId, groupId)` — destructive; undo: `orgAdmin.removeUserFromGroup`.
-- `orgAdmin.removeUserFromGroup(accountId, groupId)` — destructive; undo: `orgAdmin.addUserToGroup`.
+### `orgAdmin.readOrg` — read-only
 
-### Groups
+`getOrgPolicies(type?)`, `queryAuditLog(from?, to?, actor?, action?,
+product?, cursor?, limit?)` — `from`/`to` accept ISO-8601 or epoch
+millis — and `listVerifiedDomains`.
 
-- `orgAdmin.listGroups(cursor?)`.
-- `orgAdmin.getGroup(groupId)`.
-- `orgAdmin.createGroup(name, description?)` — destructive; undo: `orgAdmin.deleteGroup` with the id in the journal `after` payload.
-- `orgAdmin.deleteGroup(groupId)` — destructive, irreversible.
+### `orgAdmin.manageUser` — destructive
 
-### Policies
+| op | Undo |
+|---|---|
+| `provisionUser(email, displayName, profile?)` | none — irreversible |
+| `deactivateUser(accountId)` | `orgAdmin.manageUser` op `restoreUser` |
+| `restoreUser(accountId)` | `orgAdmin.manageUser` op `deactivateUser` |
 
-- `orgAdmin.getOrgPolicies(type?)`.
-- `orgAdmin.setOrgPolicy(policyId, body)` — destructive; undo: `orgAdmin.setOrgPolicy` with the journal `before` payload as `body`.
+### `orgAdmin.manageGroup` — destructive
 
-### Audit, domains, accounts
+| op | Undo |
+|---|---|
+| `createGroup(name, description?)` | `orgAdmin.delete` op `deleteGroup`, with the id from the journal `after` payload |
+| `addUserToGroup(accountId, groupId)` | `orgAdmin.delete` op `removeUserFromGroup` |
 
-- `orgAdmin.listManagedAccounts(cursor?)`.
-- `orgAdmin.queryAuditLog(from?, to?, actor?, action?, product?, cursor?, limit?)`.
-- `orgAdmin.listVerifiedDomains`.
+### `orgAdmin.delete` — destructive
+
+| op | Undo |
+|---|---|
+| `removeUserFromGroup(accountId, groupId)` | `orgAdmin.manageGroup` op `addUserToGroup` |
+| `deleteGroup(groupId)` | none — irreversible |
+
+### `orgAdmin.setOrgPolicy` — destructive
+
+Single-op tool, so no `op` field: `{ policyId, body, commit: true }`.
+Undo by calling it again with the journal `before` payload as `body`.
 
 ### Deliberately absent
 
