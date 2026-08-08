@@ -70,8 +70,8 @@ describe("MCP Apps resources + tool metadata (end-to-end over a real session)", 
     expect(del.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
 
     expect(byName.get("assets.aqlSearch")!._meta?.ui).toEqual({ resourceUri: AQL_TABLE_UI_URI });
-    expect(byName.get("gojira.listRecentOperations")!._meta?.ui).toEqual({ resourceUri: JOURNAL_UI_URI });
-    expect(byName.get("gojira.listRecentOperations")!.annotations).toMatchObject({ readOnlyHint: true });
+    expect(byName.get("gojira.readJournal")!._meta?.ui).toEqual({ resourceUri: JOURNAL_UI_URI });
+    expect(byName.get("gojira.readJournal")!.annotations).toMatchObject({ readOnlyHint: true });
 
     // Read tool without a template: no UI meta at all.
     expect(byName.get("gojira.health")!._meta).toBeUndefined();

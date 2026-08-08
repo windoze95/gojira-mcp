@@ -2,6 +2,7 @@ import axios from "axios";
 import { z } from "zod";
 import type { AnyToolDef } from "./defineTool.js";
 import { defineTool } from "./defineTool.js";
+import { defineOpTool, defineOp } from "./defineOpTool.js";
 import { ApiTokenStore } from "../../auth/apiTokenStore.js";
 import { reverters, assertRevertible } from "../../operations/revert.js";
 import {
@@ -11,6 +12,61 @@ import {
 } from "../../middleware/errorHandler.js";
 import { buildDryRunIfNotCommitted } from "../../consent/dryRun.js";
 import { JOURNAL_UI_URI } from "../../ui/appResources.js";
+
+// Module-level (defineOpTool convention): built once, alias registrations single-shot.
+const gojiraReadJournal = defineOpTool({
+    name: "gojira.readJournal",
+    description:
+      "Read the operation journal: list recent operations, 30-day rolling window (listRecentOperations), or fetch one entry with full before/after detail (getOperation).",
+    group: "utility",
+    authMethod: "oauth",
+    needsCloudId: false,
+    ui: { resourceUri: JOURNAL_UI_URI },
+    ops: [
+      defineOp({
+        op: "listRecentOperations",
+        description: "List the caller's recent operations from the journal.",
+        legacyName: "gojira.listRecentOperations",
+        input: {
+          limit: z.number().int().positive().max(200).default(25).optional(),
+          since: z.string().datetime().optional(),
+          until: z.string().datetime().optional(),
+        },
+        handler: async (input, ctx) => {
+          const sinceMs = input.since ? Date.parse(input.since) : undefined;
+          const untilMs = input.until ? Date.parse(input.until) : undefined;
+          const entries = await ctx.journal.list(ctx.accountId, {
+            limit: input.limit ?? 25,
+            sinceUnixMs: sinceMs,
+            untilUnixMs: untilMs,
+          });
+          return {
+            count: entries.length,
+            entries: entries.map((e) => ({
+              op_id: e.opId,
+              tool: e.tool,
+              target: e.target,
+              completed_at: e.completedAt,
+              outcome: e.outcome,
+              revertible: e.revertible,
+              error_code: e.errorCode ?? null,
+            })),
+          };
+        },
+      }),
+      defineOp({
+        op: "getOperation",
+        description: "Retrieve a single journal entry by opId, including before/after snapshots.",
+        legacyName: "gojira.getOperation",
+        input: { op_id: z.string().uuid().describe("Journal entry opId") },
+        handler: async (input, ctx) => {
+          const entry = await ctx.journal.get(ctx.accountId, input.op_id);
+          if (!entry) throw new NotFoundError(`No journal entry found for opId ${input.op_id}`);
+          return entry;
+        },
+      }),
+    ],
+  });
 
 export const utilityTools = (): AnyToolDef[] => [
   defineTool({
@@ -234,55 +290,7 @@ export const utilityTools = (): AnyToolDef[] => [
     },
   }),
 
-  defineTool({
-    name: "gojira.listRecentOperations",
-    description: "List the caller's recent operations from the journal. 30-day rolling window by default.",
-    group: "utility",
-    authMethod: "oauth",
-    needsCloudId: false,
-    ui: { resourceUri: JOURNAL_UI_URI },
-    input: {
-      limit: z.number().int().positive().max(200).default(25).optional(),
-      since: z.string().datetime().optional(),
-      until: z.string().datetime().optional(),
-    },
-    handler: async (input, ctx) => {
-      const sinceMs = input.since ? Date.parse(input.since) : undefined;
-      const untilMs = input.until ? Date.parse(input.until) : undefined;
-      const entries = await ctx.journal.list(ctx.accountId, {
-        limit: input.limit ?? 25,
-        sinceUnixMs: sinceMs,
-        untilUnixMs: untilMs,
-      });
-      return {
-        count: entries.length,
-        entries: entries.map((e) => ({
-          op_id: e.opId,
-          tool: e.tool,
-          target: e.target,
-          completed_at: e.completedAt,
-          outcome: e.outcome,
-          revertible: e.revertible,
-          error_code: e.errorCode ?? null,
-        })),
-      };
-    },
-  }),
-
-  defineTool({
-    name: "gojira.getOperation",
-    description: "Retrieve a single journal entry by opId, including before/after snapshots.",
-    group: "utility",
-    authMethod: "oauth",
-    needsCloudId: false,
-    ui: { resourceUri: JOURNAL_UI_URI },
-    input: { op_id: z.string().uuid() },
-    handler: async (input, ctx) => {
-      const entry = await ctx.journal.get(ctx.accountId, input.op_id);
-      if (!entry) throw new NotFoundError(`No journal entry found for opId ${input.op_id}`);
-      return entry;
-    },
-  }),
+  gojiraReadJournal,
 
   defineTool({
     name: "gojira.revertOperation",
