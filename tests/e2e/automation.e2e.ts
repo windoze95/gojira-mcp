@@ -9,9 +9,10 @@ describe.skipIf(noCreds)("e2e: Automation rules", () => {
   });
 
   it("lists rules and searches templates", async () => {
-    const list = await h.call<{ data: unknown[] }>("automation.listAutomationRules", {});
+    const list = await h.call<{ data: unknown[] }>("automation.readRule", { op: "listAutomationRules" });
     expect(Array.isArray(list.data)).toBe(true);
-    const templates = await h.call<{ data: Array<{ id: string }> }>("automation.searchAutomationTemplates", {
+    const templates = await h.call<{ data: Array<{ id: string }> }>("automation.readTemplate", {
+      op: "searchAutomationTemplates",
       payload: {},
     });
     expect(templates.data.length).toBeGreaterThan(0);
@@ -35,7 +36,7 @@ describe.skipIf(noCreds)("e2e: Automation rules", () => {
       const page = await h.call<{
         data: Array<{ id: string; parameters?: unknown[] }>;
         links?: { next?: string | null };
-      }>("automation.searchAutomationTemplates", { payload: cursor ? { cursor } : {} });
+      }>("automation.readTemplate", { op: "searchAutomationTemplates", payload: cursor ? { cursor } : {} });
       all.push(...page.data);
       cursor = page.links?.next ? new URLSearchParams(page.links.next.replace(/^\?/, "")).get("cursor") : null;
     } while (cursor && all.length < 400);
@@ -63,14 +64,16 @@ describe.skipIf(noCreds)("e2e: Automation rules", () => {
     expect(ruleUuid, `no template created a rule; first errors:\n${errors.slice(0, 3).join("\n")}`).toBeTruthy();
 
     // Export, then re-create raw.
-    const exported = await h.call<{ rule: Record<string, unknown> }>("automation.getAutomationRule", {
+    const exported = await h.call<{ rule: Record<string, unknown> }>("automation.readRule", {
+      op: "getAutomationRule",
       ruleId: ruleUuid!,
     });
     const clone = { ...exported.rule };
     for (const k of ["uuid", "id", "created", "updated", "ruleUuid"]) delete clone[k];
     clone.name = "gojira-e2e-raw-rule";
     clone.state = "DISABLED";
-    const raw = await h.call<{ rule: { ruleUuid: string } }>("automation.createAutomationRule", {
+    const raw = await h.call<{ rule: { ruleUuid: string } }>("automation.manageRule", {
+      op: "createAutomationRule",
       rule: clone,
       commit: true,
     });
@@ -79,10 +82,10 @@ describe.skipIf(noCreds)("e2e: Automation rules", () => {
 
     // Toggle + delete both, verify gone.
     for (const id of [ruleUuid!, rawUuid]) {
-      await h.call("automation.disableAutomationRule", { ruleId: id, commit: true });
-      await h.call("automation.enableAutomationRule", { ruleId: id, commit: true });
-      await h.call("automation.deleteAutomationRule", { ruleId: id, commit: true });
-      const gone = await h.callRaw("automation.getAutomationRule", { ruleId: id });
+      await h.call("automation.manageRule", { op: "disableAutomationRule", ruleId: id, commit: true });
+      await h.call("automation.manageRule", { op: "enableAutomationRule", ruleId: id, commit: true });
+      await h.call("automation.delete", { ruleId: id, commit: true });
+      const gone = await h.callRaw("automation.readRule", { op: "getAutomationRule", ruleId: id });
       expect(gone.isError).toBe(true);
     }
   });
