@@ -262,6 +262,32 @@ it (and SREMs from the family set for RTs). No effect on the upstream
 Atlassian credential — the user remains consented at Atlassian until they
 revoke the gojira app from their Atlassian profile.
 
+## Split-surface fleets: issuer stamping and the shared callback
+
+Running several instances against **one shared Redis**
+([`docs/deployment/profiles.md`](../deployment/profiles.md)) bends the flow
+in two deliberate ways:
+
+**Issuer stamping.** Minted AT/RT records carry
+`issuer = MCP_SERVER_URL`. `verifyAccessToken` rejects a token whose issuer
+is a sibling instance (without deleting it — it is still valid there), and
+`exchangeRefreshToken` peeks *before* its consuming `GETDEL` so a sibling's
+RT is refused without being destroyed (consuming it would later trip reuse
+detection against the legitimate holder). Records without the field
+(minted pre-upgrade) are accepted and re-minted with a stamp on their next
+rotation.
+
+**Shared Atlassian callback.** An Atlassian 3LO app registers one callback
+URL, so the whole fleet shares one `ATLASSIAN_CALLBACK_URI`, anchored on
+one instance (the readonly profile). The redirect always lands there, but
+the flow state (`pending_auth:*`, `atlassian_state:*`, `auth_code:*`) is
+deliberately **not** issuer-stamped: the anchor instance consumes the
+state, mints the auth code, and redirects to the client, which then POSTs
+`/token` to the *originating* instance — where the shared Redis resolves
+the same `auth_code:*` key. This only works with shared Redis and an
+identical Atlassian app + client secret everywhere; the anchor instance
+must be running for any consent to complete.
+
 ## See also
 
 - [OAuth scope handling](scope-grammar.md)

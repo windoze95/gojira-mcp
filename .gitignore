@@ -5,6 +5,12 @@ coverage/
 .env.*
 !.env.example
 !.env.e2e.example
+
+# Operator copies of the split-surface profile env files (examples stay tracked)
+deploy/profiles/*.env
+# TLS material for the fleet's https variant
+deploy/profiles/certs/*
+!deploy/profiles/certs/.gitkeep
 *.log
 .DS_Store
 .vitest/

@@ -135,6 +135,7 @@ export function registerWrappedTool(
             },
             tool: def.name,
             group: def.group,
+            instance: deps.config.instanceName,
             cloud_id: cloudId,
             client_id: clientId,
             request,

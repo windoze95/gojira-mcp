@@ -103,6 +103,18 @@ const ConfigSchema = z
     // `npm run build:ui`; without them the flag is inert.
     GOJIRA_UI_ENABLED: truthy.default("true"),
 
+    // Per-instance display name. Surfaces in the MCP handshake (serverInfo),
+    // OAuth protected-resource metadata, /health, gojira.health, audit records,
+    // journal entries, and log bindings — so an operator running several
+    // split-surface instances (see deploy/profiles/) can tell them apart.
+    GOJIRA_INSTANCE_NAME: z
+      .string()
+      .regex(
+        /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+        "GOJIRA_INSTANCE_NAME must be 1-64 chars: letters, digits, '.', '_', '-'; starting alphanumeric",
+      )
+      .default("gojira-mcp"),
+
     // Atlassian NearLimit tuning
     GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT: z.coerce.number().int().nonnegative().default(5),
 
@@ -200,6 +212,8 @@ export type AppConfig = Readonly<{
   metricsToken: string | null;
   /** MCP Apps (SEP-1865) interactive UI templates on/off for this deployment. */
   ui: { enabled: boolean };
+  /** Per-instance display name (GOJIRA_INSTANCE_NAME); "gojira-mcp" unless set. */
+  instanceName: string;
   refreshReuseAlertWebhook: string | null;
   nearLimitExtraDeduct: number;
   /**
@@ -268,6 +282,7 @@ export function loadConfig(): AppConfig {
     journal: { ttlDays: v.GOJIRA_OPERATION_JOURNAL_TTL_DAYS },
     metricsToken: v.GOJIRA_METRICS_TOKEN ?? null,
     ui: { enabled: v.GOJIRA_UI_ENABLED },
+    instanceName: v.GOJIRA_INSTANCE_NAME,
     refreshReuseAlertWebhook: v.GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK ?? null,
     nearLimitExtraDeduct: v.GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT,
     enabledGroups: v.GOJIRA_ENABLED_GROUPS,

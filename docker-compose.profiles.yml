@@ -1,0 +1,146 @@
+# Split-surface profile fleet: one image, several simultaneous instances, each
+# serving a different GOJIRA_ENABLED_GROUPS subset on its own port. Connect and
+# disconnect whole instances in your MCP client to batch tool availability
+# instead of toggling individual tools. See docs/deployment/profiles.md.
+#
+# Standalone file — do NOT combine with docker-compose.yml (both define their
+# own redis). Usage:
+#   cp deploy/profiles/shared.env.example deploy/profiles/shared.env   # + each profile
+#   docker compose -p gojira -f docker-compose.profiles.yml --env-file deploy/profiles/shared.env up -d --build
+#   docker compose -p gojira -f docker-compose.profiles.yml --env-file deploy/profiles/shared.env --profile org up -d   # include org-admin
+#
+# Ports publish on all interfaces: the fleet is meant to be reached over a
+# PRIVATE network as <scheme>://<GOJIRA_HOST>:<port>. Firewall accordingly.
+#
+# ISSUER RULE (MCP SDK): an http:// MCP_SERVER_URL is accepted only for
+# localhost/127.0.0.1. For any other hostname pick one in shared.env:
+#   - plain http on the LAN: set MCP_DANGEROUSLY_ALLOW_INSECURE_ISSUER_URL=true
+#   - https: set GOJIRA_URL_SCHEME=https + TLS_CERT_PATH/TLS_KEY_PATH
+#     (certs go in deploy/profiles/certs/, mounted at /certs read-only)
+# Otherwise every container crash-loops with "Issuer URL must be HTTPS".
+#
+# The environment: blocks below deliberately OVERRIDE the env files (compose
+# precedence): MCP_PORT / MCP_SERVER_URL / REDIS_URL are structural to this
+# topology and must not drift per profile file.
+
+# `build:` lives on gojira-readonly ONLY — five services building the same
+# tag in parallel race each other exporting the image. Everyone else reuses
+# the tag readonly builds.
+x-gojira: &gojira
+  image: gojira-mcp:latest
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks: [internal]
+  volumes:
+    # In-process TLS material for the https variant; empty and inert otherwise.
+    - ./deploy/profiles/certs:/certs:ro
+
+x-gojira-env: &gojira-env
+  MCP_PORT: 8081
+  REDIS_URL: "redis://:${REDIS_PASSWORD:?set in deploy/profiles/shared.env, passed via --env-file}@redis:6379"
+
+services:
+  # Always-connected read surface; also the fleet's OAuth callback anchor —
+  # ATLASSIAN_CALLBACK_URI in shared.env points at THIS instance's port.
+  gojira-readonly:
+    <<: *gojira
+    build:
+      context: .
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *gojira-env
+      MCP_SERVER_URL: "${GOJIRA_URL_SCHEME:-http}://${GOJIRA_HOST:?set in deploy/profiles/shared.env, passed via --env-file}:8081"
+    env_file:
+      - deploy/profiles/shared.env
+      - deploy/profiles/readonly.env
+
+  # JSM + forms + Assets/CMDB + automation, read+write.
+  gojira-service:
+    <<: *gojira
+    ports:
+      - "8082:8081"
+    environment:
+      <<: *gojira-env
+      MCP_SERVER_URL: "${GOJIRA_URL_SCHEME:-http}://${GOJIRA_HOST:?set in deploy/profiles/shared.env, passed via --env-file}:8082"
+    env_file:
+      - deploy/profiles/shared.env
+      - deploy/profiles/service.env
+
+  # Projects, schemes, workflows, custom fields, read+write.
+  gojira-platform:
+    <<: *gojira
+    ports:
+      - "8083:8081"
+    environment:
+      <<: *gojira-env
+      MCP_SERVER_URL: "${GOJIRA_URL_SCHEME:-http}://${GOJIRA_HOST:?set in deploy/profiles/shared.env, passed via --env-file}:8083"
+    env_file:
+      - deploy/profiles/shared.env
+      - deploy/profiles/platform.env
+
+  # Agile boards, filters/dashboards, Confluence spaces, read+write.
+  gojira-workspace:
+    <<: *gojira
+    ports:
+      - "8084:8081"
+    environment:
+      <<: *gojira-env
+      MCP_SERVER_URL: "${GOJIRA_URL_SCHEME:-http}://${GOJIRA_HOST:?set in deploy/profiles/shared.env, passed via --env-file}:8084"
+    env_file:
+      - deploy/profiles/shared.env
+      - deploy/profiles/workspace.env
+
+  # Org administration — opt-in: only starts under `--profile org`.
+  gojira-org:
+    <<: *gojira
+    profiles: ["org"]
+    ports:
+      - "8085:8081"
+    environment:
+      <<: *gojira-env
+      MCP_SERVER_URL: "${GOJIRA_URL_SCHEME:-http}://${GOJIRA_HOST:?set in deploy/profiles/shared.env, passed via --env-file}:8085"
+    env_file:
+      - deploy/profiles/shared.env
+      - deploy/profiles/org.env
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--requirepass"
+      - "${REDIS_PASSWORD}"
+      - "--maxmemory"
+      - "512mb"
+      # noeviction, NOT allkeys-lru: this store holds encrypted credentials, API
+      # token bindings, and the operation journal — for the WHOLE fleet. Under
+      # memory pressure, fail writes loudly rather than silently evicting
+      # tokens/audit trail. Size --maxmemory to the workload; alert on used_memory.
+      - "--maxmemory-policy"
+      - "noeviction"
+      - "--appendonly"
+      - "yes"
+    environment:
+      # Make the password available inside the container for the healthcheck.
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    expose: ["6379"]
+    healthcheck:
+      # CMD-SHELL so $REDIS_PASSWORD expands; exec-form CMD passes it literally
+      # and the AUTH'd PING then fails, wedging depends_on: service_healthy.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis-data:/data
+    networks: [internal]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  redis-data:

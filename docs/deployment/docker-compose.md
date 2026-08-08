@@ -11,6 +11,10 @@ isolated bridge network.
 - `docker-compose.caddy.yml` — overlay adding a Caddy 2 reverse proxy for
   automatic TLS.
 - `Caddyfile` — minimal TLS config bound to `${CADDY_DOMAIN}`.
+- `docker-compose.profiles.yml` — **standalone** alternative (don't combine
+  with the files above): the split-surface fleet — several simultaneous
+  instances of one image, each serving a different tool subset on its own
+  port. See [`profiles.md`](profiles.md).
 
 ## Plain HTTP (behind your own proxy)
 

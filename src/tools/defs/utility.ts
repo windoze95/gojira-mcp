@@ -4,7 +4,11 @@ import type { AnyToolDef } from "./defineTool.js";
 import { defineTool } from "./defineTool.js";
 import { ApiTokenStore } from "../../auth/apiTokenStore.js";
 import { reverters, assertRevertible } from "../../operations/revert.js";
-import { ValidationError, NotFoundError } from "../../middleware/errorHandler.js";
+import {
+  ValidationError,
+  NotFoundError,
+  InsufficientPermissionsError,
+} from "../../middleware/errorHandler.js";
 import { buildDryRunIfNotCommitted } from "../../consent/dryRun.js";
 import { JOURNAL_UI_URI } from "../../ui/appResources.js";
 
@@ -27,6 +31,7 @@ export const utilityTools = (): AnyToolDef[] => [
       return {
         status: redis === "ok" ? "ok" : "degraded",
         redis,
+        instance: ctx.config.instanceName,
         oauth_issuer: ctx.config.mcpServerUrl,
         pinned_cloud_id: ctx.config.atlassian.pinnedCloudId,
         enabled_groups: ctx.config.enabledGroups,
@@ -51,6 +56,7 @@ export const utilityTools = (): AnyToolDef[] => [
         email: ctx.user.email,
         accessible_cloud_ids: ctx.storedToken?.accessible_cloud_ids ?? [],
         primary_cloud_id: ctx.storedToken?.primary_cloud_id ?? null,
+        instance: ctx.config.instanceName,
         pinned_cloud_id: ctx.config.atlassian.pinnedCloudId,
         enabled_groups: ctx.config.enabledGroups,
         bound_api_token: !!ctx.apiToken,
@@ -160,11 +166,17 @@ export const utilityTools = (): AnyToolDef[] => [
   defineTool({
     name: "gojira.listEnabledTools",
     description:
-      "Lists the tools available to this caller, given the deployment's operator allowlist and org-admin gate.",
+      "Lists the tools available to this caller, given the deployment's operator allowlist and org-admin gate. Pass available_only:true to omit tools this instance does not serve.",
     group: "utility",
     authMethod: "none",
     needsCloudId: false,
-    handler: async (_input, ctx) => {
+    input: {
+      available_only: z
+        .boolean()
+        .optional()
+        .describe("When true, list only the tools actually callable on this instance."),
+    },
+    handler: async (input, ctx) => {
       // Lazy import to avoid a circular cycle between defs/index and utility.
       const { allTools } = await import("./index.js");
       const tools = allTools();
@@ -182,7 +194,7 @@ export const utilityTools = (): AnyToolDef[] => [
         let reason: string | undefined;
         if (!enabledSet.has(t.group)) {
           available = false;
-          reason = `group '${t.group}' is not enabled on this deployment`;
+          reason = `group '${t.group}' is not enabled on this instance (it may be served by a sibling gojira-mcp instance)`;
         } else if (t.group === "admin_org" && !ctx.config.orgAdmin.enabled) {
           available = false;
           reason = "org admin disabled on this instance";
@@ -199,21 +211,23 @@ export const utilityTools = (): AnyToolDef[] => [
           ...(reason ? { reason } : {}),
         });
       }
+      const listed = input.available_only === true ? result.filter((t) => t.available) : result;
       // Aggregate by group for client UIs that want to render grouped lists.
       const byGroup: Record<string, string[]> = {};
-      for (const t of result) {
+      for (const t of listed) {
         if (!byGroup[t.group]) byGroup[t.group] = [];
         byGroup[t.group].push(t.name);
       }
       return {
         deployment: {
+          instance: ctx.config.instanceName,
           org_admin_enabled: ctx.config.orgAdmin.enabled,
           pinned_cloud_id: ctx.config.atlassian.pinnedCloudId,
           enabled_groups: ctx.config.enabledGroups,
         },
         caller: { has_api_token: !!ctx.apiToken },
         by_group: byGroup,
-        tools: result,
+        tools: listed,
       };
     },
   }),
@@ -290,6 +304,26 @@ export const utilityTools = (): AnyToolDef[] => [
         throw new ValidationError(
           "Journal entry belongs to a different cloudId than this call resolves to.",
           { entry_cloud_id: entry.cloudId, resolved_cloud_id: ctx.cloudId },
+        );
+      }
+      // A revert executes the ORIGINAL tool's inverse mutation, so it demands
+      // that tool's group — not just `utility`. Without this, any instance
+      // sharing the journal's Redis (split-surface profiles run this way) could
+      // re-run another instance's write surface through its journal entries.
+      // Applies to the dry-run branch too: the dry run reveals before/after
+      // state the caller's surface never exposed. Fails closed when the
+      // original tool no longer resolves to a def.
+      const { allTools } = await import("./index.js");
+      const originalDef = allTools().find((t) => t.name === entry.tool);
+      if (!originalDef || !ctx.config.enabledGroups.includes(originalDef.group)) {
+        const owner = entry.instance
+          ? ` The operation was journaled by instance '${entry.instance}'; connect to that instance to revert it.`
+          : "";
+        throw new InsufficientPermissionsError(
+          originalDef
+            ? `Reverting '${entry.tool}' requires group '${originalDef.group}', which is not enabled on this instance.${owner}`
+            : `Cannot resolve the original tool '${entry.tool}' to a permission group; refusing to revert.${owner}`,
+          { original_tool: entry.tool, original_group: originalDef?.group ?? null },
         );
       }
       if (input.commit !== true) {

@@ -11,6 +11,8 @@ export interface AuditEvent {
   actor: { account_id: string; name: string | null; email: string | null };
   tool: string;
   group: string;
+  /** GOJIRA_INSTANCE_NAME of the emitting instance (split-surface deployments). */
+  instance: string;
   cloud_id: string | null;
   client_id: string | null;
   request: Record<string, unknown>;

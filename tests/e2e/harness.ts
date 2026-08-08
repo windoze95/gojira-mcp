@@ -94,6 +94,12 @@ function e2eConfig(creds: E2ECreds): AppConfig {
   for (const [k, val] of Object.entries(seed)) {
     if (process.env[k] === undefined || process.env[k] === "") process.env[k] = val;
   }
+  // Force-overwrite the group allowlist: split-surface profiles put narrow
+  // GOJIRA_ENABLED_GROUPS values into ambient env files, and a leaked one here
+  // would silently gate most e2e suites into InsufficientPermissionsError at
+  // dispatch (registration is unfiltered, wrapHandler re-checks). E2E always
+  // runs the full non-org surface.
+  process.env.GOJIRA_ENABLED_GROUPS = seed.GOJIRA_ENABLED_GROUPS;
   return loadConfig();
 }
 

@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
     "generate-key": "tsx scripts/generate-encryption-key.ts",
     "preflight": "bash scripts/preflight.sh",
+    "preflight:profiles": "bash scripts/preflight-profiles.sh",
     "docs:tools": "tsx scripts/gen-tool-docs.ts",
     "e2e": "vitest run --config vitest.e2e.config.ts"
   },

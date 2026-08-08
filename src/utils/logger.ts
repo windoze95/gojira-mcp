@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import os from "node:os";
 import pino from "pino";
 
 const logLevel = (process.env.LOG_LEVEL ?? "info") as
@@ -9,6 +10,10 @@ const logLevel = (process.env.LOG_LEVEL ?? "info") as
   | "debug"
   | "trace";
 const isDev = process.env.NODE_ENV !== "production";
+// Read from env (not loadConfig) — the logger initializes at import time,
+// before config validation runs. Only bound when set, so single-instance
+// deployments keep their existing log shape.
+const instanceName = process.env.GOJIRA_INSTANCE_NAME;
 
 // pino-pretty is a devDependency and is pruned from the production image. Only
 // use it when it's actually resolvable, otherwise pino throws at startup
@@ -27,6 +32,9 @@ function prettyAvailable(): boolean {
 
 export const logger = pino({
   level: logLevel,
+  ...(instanceName
+    ? { base: { pid: process.pid, hostname: os.hostname(), instance: instanceName } }
+    : {}),
   redact: {
     paths: [
       "*.token",

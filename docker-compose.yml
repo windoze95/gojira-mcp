@@ -8,7 +8,8 @@ services:
       # Bind to loopback only. This is the plain-HTTP OAuth/MCP listener; expose
       # it publicly through the Caddy TLS overlay, not directly. (The Caddy
       # overlay resets this and reaches the app over the internal network.)
-      - "127.0.0.1:8081:8081"
+      # GOJIRA_HOST_PORT lets a second single-instance stack coexist on one host.
+      - "127.0.0.1:${GOJIRA_HOST_PORT:-8081}:8081"
     environment:
       MCP_PORT: 8081
       MCP_SERVER_URL: "${MCP_SERVER_URL:-https://gojira.example.com}"

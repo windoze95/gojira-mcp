@@ -55,6 +55,14 @@ interface StoredAccessToken {
   clientId: string;
   expiresAt: number; // unix-seconds
   familyId: string;
+  /**
+   * MCP_SERVER_URL of the instance that minted the token. Split-surface
+   * profiles share one Redis, so without this check a bearer minted by the
+   * read-only instance would authenticate against the write instance —
+   * `verifyAccessToken` rejects on mismatch. Absent on tokens minted before
+   * the field existed; those are accepted (grandfathered).
+   */
+  issuer?: string;
 }
 
 interface StoredRefreshToken {
@@ -62,6 +70,8 @@ interface StoredRefreshToken {
   clientId: string;
   familyId: string;
   generation: number;
+  /** Same contract as StoredAccessToken.issuer. */
+  issuer?: string;
 }
 
 export interface MintMcpTokensOpts {
@@ -191,6 +201,24 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     _scopes?: string[],
   ): Promise<OAuthTokens> {
     const rtKey = GojiraOAuthProvider.keys.mcpRefresh(refreshToken);
+    // Cross-instance guard, checked with a PEEK before the consuming GETDEL:
+    // consuming a sibling instance's RT here would destroy a token that is
+    // still perfectly valid at its own instance — and later legitimate use
+    // there would then trip reuse detection and revoke the whole family. The
+    // peek→getdel gap is benign: same-instance races still settle on GETDEL.
+    const peeked = await this.redis.get(rtKey);
+    if (peeked) {
+      const peekedRt = JSON.parse(peeked) as StoredRefreshToken;
+      if (peekedRt.issuer !== undefined && peekedRt.issuer !== this.config.mcpServerUrl) {
+        throw new InvalidGrantError("refresh token was issued by a different gojira-mcp instance");
+      }
+      if (peekedRt.issuer === undefined) {
+        logger.warn(
+          { accountId: peekedRt.accountId, clientId: peekedRt.clientId },
+          "Refresh token has no issuer stamp (minted pre-upgrade); accepting and re-minting with one",
+        );
+      }
+    }
     // Atomically claim the RT: only one caller can win. A concurrent replay
     // (attacker racing the legitimate holder) loses the GETDEL and falls into
     // the reuse-detection branch — plain GET would let both requests succeed
@@ -250,6 +278,16 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     if (at.expiresAt <= nowSec) {
       await this.redis.del(GojiraOAuthProvider.keys.mcpAccess(token));
       throw new InvalidTokenError("access token has expired");
+    }
+    // Cross-instance guard (shared-Redis split-surface deployments): a token
+    // minted by a sibling instance is valid THERE, so reject without deleting.
+    if (at.issuer === undefined) {
+      logger.debug(
+        { accountId: at.accountId, clientId: at.clientId },
+        "Access token has no issuer stamp (minted pre-upgrade); accepting",
+      );
+    } else if (at.issuer !== this.config.mcpServerUrl) {
+      throw new InvalidTokenError("access token was issued by a different gojira-mcp instance");
     }
     return {
       token,
@@ -351,12 +389,14 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
       clientId: opts.clientId,
       expiresAt,
       familyId,
+      issuer: this.config.mcpServerUrl,
     };
     const rtVal: StoredRefreshToken = {
       accountId: opts.accountId,
       clientId: opts.clientId,
       familyId,
       generation,
+      issuer: this.config.mcpServerUrl,
     };
 
     const pipeline = this.redis.pipeline();
