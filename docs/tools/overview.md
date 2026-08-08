@@ -1,8 +1,9 @@
 # Tools overview
 
-gojira-mcp exposes **155 tools** spread across **22 permission groups**
-(plus an always-available `utility` group). Each tool is defined
-declaratively via `defineTool` in `src/tools/defs/*.ts`.
+gojira-mcp exposes **155 tools** spread across **23 permission groups**
+(including `utility`, which every deployment should list explicitly —
+nothing auto-injects it). Each tool is defined declaratively via
+`defineTool` in `src/tools/defs/*.ts`.
 
 ## At a glance
 

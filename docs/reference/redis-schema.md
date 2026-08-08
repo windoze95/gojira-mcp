@@ -9,8 +9,8 @@ TTLs and types are exact; sizes are typical.
 | `pending_auth:<id>` | String (JSON) | 10 min | none | MCP client's PKCE/redirect captured during /authorize. |
 | `atlassian_state:<state>` | String (JSON) | 10 min | none | CSRF state for the upstream leg. **Consumed via `GETDEL`.** |
 | `auth_code:<code>` | String (JSON) | 5 min | none | gojira-issued auth code. **Consumed via `GETDEL`.** |
-| `mcp_token:<at>` | String (JSON) | 1 hour | none | MCP access token → `{ accountId, clientId, scopes, expiresAt, familyId }`. |
-| `mcp_refresh:<rt>` | String (JSON) | 30 days | none | MCP refresh token → `{ accountId, clientId, scopes, familyId, generation }`. |
+| `mcp_token:<at>` | String (JSON) | 1 hour | none | MCP access token → `{ accountId, clientId, expiresAt, familyId, issuer }`. `issuer` = the minting instance's `MCP_SERVER_URL`; `verifyAccessToken` rejects a mismatch (split-surface fleets share this Redis), and a missing field (pre-upgrade token) is accepted. |
+| `mcp_refresh:<rt>` | String (JSON) | 30 days | none | MCP refresh token → `{ accountId, clientId, familyId, generation, issuer }`. Issuer contract as above; a sibling instance's exchange is refused *without* consuming the token. |
 | `rt_family:<rt>` | String | 31 days | none | Per-RT pointer to its family. Outlives the RT for reuse-detection grace. |
 | `rt_family_account:<familyId>` | String (accountId) | 31 days | none | Family → account map. Outlives the RTs so reuse detection can still attribute the incident to a user after the presented RT's blob is gone. |
 | `refresh_family:<familyId>` | Set | 30 days | none | Currently-live RT ids in the family. |
@@ -19,7 +19,7 @@ TTLs and types are exact; sizes are typical.
 | `apitoken:<accountId>` | String (base64) | None (manual revoke) | **AES-256-GCM** | Per-user Atlassian API token side-channel. |
 | `token_refresh_lock:<accountId>` | String (UUID) | 10 sec | none | Distributed lock for the upstream refresh path. CAD release via Lua. |
 | `ratelimit:<accountId>` | Hash | 120 sec | none | Token-bucket: `tokens`, `last_refill_ms`, `reset_floor_until_ms`. |
-| `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible. |
+| `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible, `instance` (the writing instance's `GOJIRA_INSTANCE_NAME`; absent on pre-upgrade entries). |
 | `op_journal_idx:<accountId>` | Sorted set (score = completedAt ms) | same | none | Index for `gojira.listRecentOperations`. |
 | `assets_workspace:<cloudId>` | String | 24 hours | none | Cached Assets workspaceId per cloud site. |
 | `metrics:calls:<YYYY-MM-DD>` | Hash (`<tool>\|<accountId>` → count) | 400 days, refreshed per write | none | Successful tool calls per tool/account/UTC day. Written fire-and-forget from the tool wrapper; read by `GET /metrics/usage`. |

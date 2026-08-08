@@ -173,6 +173,7 @@ name. Lower is better for model selection accuracy — see
 | 5 — Org-admin (separate host) | **24** | `admin.atlassian.com` only |
 | 6 — Multi-tenant (prod + sandbox) | **137 each** | Two pinned instances side-by-side |
 | 7 — Local development | **137** | Same as default safe + debug logs |
+| 8 — Split-surface fleet | **80/65/51/35** (+24) | One tenant, several simultaneous instances — batch tools by connecting/disconnecting servers |
 
 ### Permission groups (legend)
 
@@ -363,6 +364,57 @@ NODE_ENV=development
 # no PINNED_CLOUD_ID — use the user's primary cloudId
 ```
 
+### Pattern 8 — Split-surface fleet · 80/65/51/35 (+24) tools
+
+One tenant, one image, several *simultaneous* containers — each serving a
+different slice of the catalog on its own port. Instead of toggling 155
+tools in your MCP client, connect and disconnect whole servers to batch
+tool availability to the work at hand. Full guide:
+[`docs/deployment/profiles.md`](docs/deployment/profiles.md).
+
+| Profile | Port | Tools | Surface |
+|---|---|---|---|
+| `gojira-readonly` | 8081 | 80 | `utility` + every `read_*` group — stay connected to this one; also the fleet's OAuth callback anchor |
+| `gojira-service` | 8082 | 65 | JSM admin + forms + Assets/CMDB + automation, read+write |
+| `gojira-platform` | 8083 | 51 | Projects, schemes, workflows, custom fields, read+write (`delete_projects` opt-in) |
+| `gojira-workspace` | 8084 | 35 | Agile boards, filters/dashboards, Confluence spaces, read+write |
+| `gojira-org` | 8085 | 24 | `admin_org`, isolated; only starts with `--profile org` |
+
+The fleet shares one Redis and one Atlassian OAuth app: you consent once
+per instance (against the same app), bind the API token once for the whole
+fleet, and see one merged operation journal. Two safeguards make the
+"disconnect the write server = writes are off" model real: bearer tokens
+are issuer-stamped (an instance rejects a sibling's tokens), and
+`gojira.revertOperation` refuses to revert an operation whose original
+tool's group is not enabled on the calling instance.
+
+```bash
+cp deploy/profiles/shared.env.example deploy/profiles/shared.env    # fleet invariants
+cp deploy/profiles/readonly.env.example deploy/profiles/readonly.env  # + each profile you run
+npm run preflight:profiles
+docker compose -p gojira -f docker-compose.profiles.yml \
+  --env-file deploy/profiles/shared.env up -d --build
+```
+
+Reachability: the MCP SDK only accepts `http://` server URLs for
+localhost — for a LAN hostname either opt out explicitly
+(`MCP_DANGEROUSLY_ALLOW_INSECURE_ISSUER_URL=true`) or run https with
+in-process TLS. `shared.env.example` documents all three variants and
+`npm run preflight:profiles` enforces the choice before boot.
+
+Client config — one entry per profile, connect/disconnect as needed:
+
+```json
+{
+  "mcpServers": {
+    "gojira-readonly":  { "type": "http", "url": "http://gojira.internal.example.com:8081/mcp" },
+    "gojira-service":   { "type": "http", "url": "http://gojira.internal.example.com:8082/mcp" },
+    "gojira-platform":  { "type": "http", "url": "http://gojira.internal.example.com:8083/mcp" },
+    "gojira-workspace": { "type": "http", "url": "http://gojira.internal.example.com:8084/mcp" }
+  }
+}
+```
+
 ---
 
 ## Documentation map
@@ -397,6 +449,7 @@ NODE_ENV=development
 ### Deployment
 - [Environment variables](docs/deployment/environment-variables.md)
 - [Docker Compose](docs/deployment/docker-compose.md)
+- [Split-surface profiles](docs/deployment/profiles.md)
 - [Caddy TLS overlay](docs/deployment/caddy-tls.md)
 - [Secrets management](docs/deployment/secrets.md)
 - [Deploy procedure](docs/deployment/deploy-procedure.md)
