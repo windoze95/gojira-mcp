@@ -209,7 +209,8 @@ then validates PKCE locally. Then `exchangeAuthorizationCode`:
    - new family UUID, `generation: 1`
    - bearer scopes empty (the bearer carries `accountId` in its `extra` field;
      the SDK attaches that to every tool dispatch)
-   - persist `mcp_token:<at>`, `mcp_refresh:<rt>`, `rt_family:<rt>`
+   - persist `mcp_token:<at>`, `mcp_refresh:<rt>`, and a structured
+     client/issuer-bound `rt_family:<rt>` index
    - SADD `refresh_family:<familyId>` and `refresh_family_tokens:<familyId>`
 5. Return `{ access_token, refresh_token, token_type: "Bearer",
               expires_in: 3600, scope }`.
@@ -238,16 +239,24 @@ grant_type=refresh_token&refresh_token=<rt>&client_id=...&client_secret=...
 
 Provider's `exchangeRefreshToken`:
 
-1. `GET mcp_refresh:<rt>` — if missing, check `rt_family:<rt>` for the
-   familyId and detect reuse if siblings still exist. See
+1. Read and parse the active RT and its `rt_family:<rt>` index; reject an
+   incompatible client or issuer before mutation.
+2. Supply those exact raw values as compare-and-swap guards to one Redis Lua
+   transition. See
    [refresh-token-rotation.md](../architecture/refresh-token-rotation.md).
-2. Verify clientId.
-3. Verify upstream `token:<accountId>` still exists. If not, burn the RT
-   and 401 — forces a full re-auth.
-4. Mint a new pair via `mintMcpTokens` with `generation+1`, same family.
-6. DEL the old `mcp_refresh:<rt>` (the `rt_family:<rt>` index lives 31d for
-   reuse-detection grace).
-7. Return the new tokens.
+3. If a bound five-second `mcp_refresh_replay:<rt>` receipt exists and its
+   immediate child AT/RT are still live, return that exact winning pair without
+   extending the receipt.
+4. Otherwise, for an active RT, verify upstream `token:<accountId>`, consume
+   the parent, mint generation N+1 in the same family, update the family
+   indexes, and write the fixed receipt atomically.
+5. For a stale, bound RT outside that recovery boundary, atomically delete all
+   current family credentials, emit `REFRESH_TOKEN_REUSE`, and return
+   `invalid_grant`.
+
+An active legacy RT with a bare family index is accepted and upgraded during
+rotation. An already-stale bare index cannot prove its client/issuer binding,
+so it is rejected without revoking a possibly unrelated sibling family.
 
 ### Step 8: Revoke
 
@@ -270,12 +279,12 @@ in two deliberate ways:
 
 **Issuer stamping.** Minted AT/RT records carry
 `issuer = MCP_SERVER_URL`. `verifyAccessToken` rejects a token whose issuer
-is a sibling instance (without deleting it — it is still valid there), and
-`exchangeRefreshToken` peeks *before* its consuming `GETDEL` so a sibling's
-RT is refused without being destroyed (consuming it would later trip reuse
-detection against the legitimate holder). Records without the field
-(minted pre-upgrade) are accepted and re-minted with a stamp on their next
-rotation.
+is a sibling instance without deleting it. `exchangeRefreshToken` validates
+active records and structured family indexes before mutation; the Redis script
+also validates receipt client/issuer fields before disclosure. Records without
+an issuer (minted pre-upgrade) are accepted while active and re-minted with a
+stamp on their next rotation. Already-stale unbound legacy indexes are rejected
+without family revocation.
 
 **Shared Atlassian callback.** An Atlassian 3LO app registers one callback
 URL, so the whole fleet shares one `ATLASSIAN_CALLBACK_URI`, anchored on

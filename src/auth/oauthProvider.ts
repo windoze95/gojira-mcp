@@ -31,6 +31,180 @@ const MCP_ACCESS_TTL = 60 * 60;
 const MCP_REFRESH_TTL = 30 * 24 * 60 * 60;
 /** Slightly longer than the RT so we can detect reuse for a grace window. */
 const RT_FAMILY_INDEX_TTL = 31 * 24 * 60 * 60;
+/**
+ * A duplicate refresh in this fixed, non-sliding window receives the exact
+ * pair minted by the winning request. Keep this deliberately tiny: possession
+ * of the old bearer is sufficient to claim the receipt.
+ */
+const MCP_REFRESH_REPLAY_TTL = 5;
+const REFRESH_FAMILY_TTL = MCP_REFRESH_TTL;
+
+/**
+ * One Redis-atomic refresh-family transition.
+ *
+ * ioredis-mock does not expose Lua's cjson global, so TypeScript parses and
+ * validates the immutable JSON records, then passes their exact raw values as
+ * compare-and-swap guards. The short replay receipt is a Redis hash so Lua can
+ * validate its client/issuer binding without decoding JSON.
+ */
+const ROTATE_REFRESH_TOKEN_SCRIPT = `
+local active_key = KEYS[1]
+local replay_key = KEYS[2]
+local old_index_key = KEYS[3]
+local upstream_key = KEYS[4]
+local new_access_key = KEYS[5]
+local new_refresh_key = KEYS[6]
+local new_index_key = KEYS[7]
+local family_account_key = KEYS[8]
+local family_refresh_key = KEYS[9]
+local family_access_key = KEYS[10]
+
+local expected_active = ARGV[1]
+local expected_index = ARGV[2]
+local requester_client = ARGV[3]
+local requester_issuer = ARGV[4]
+local old_refresh_token = ARGV[5]
+local new_access_token = ARGV[6]
+local new_refresh_token = ARGV[7]
+local new_access_value = ARGV[8]
+local new_refresh_value = ARGV[9]
+local old_index_value = ARGV[10]
+local new_index_value = ARGV[11]
+local family_id = ARGV[12]
+local account_id = ARGV[13]
+local generation = ARGV[14]
+local access_ttl = tonumber(ARGV[15])
+local refresh_ttl = tonumber(ARGV[16])
+local index_ttl = tonumber(ARGV[17])
+local family_ttl = tonumber(ARGV[18])
+local replay_ttl = tonumber(ARGV[19])
+
+-- A receipt is valid only for the immediate child generation. Reading it does
+-- not extend its TTL, so repeated retries cannot turn the grace into a sliding
+-- replay window.
+if redis.call('EXISTS', replay_key) == 1 then
+  local replay = redis.call(
+    'HMGET',
+    replay_key,
+    'client_id',
+    'issuer',
+    'family_id',
+    'account_id',
+    'generation',
+    'access_token',
+    'refresh_token',
+    'token_type',
+    'expires_in'
+  )
+  if replay[1] ~= requester_client then
+    return {'wrong_client'}
+  end
+  if replay[2] ~= requester_issuer then
+    return {'wrong_issuer'}
+  end
+
+  local child_access_key = 'mcp_token:' .. replay[6]
+  local child_refresh_key = 'mcp_refresh:' .. replay[7]
+  local child_family_key = 'refresh_family:' .. replay[3]
+  if redis.call('EXISTS', child_access_key) == 1
+      and redis.call('EXISTS', child_refresh_key) == 1
+      and redis.call('SISMEMBER', child_family_key, replay[7]) == 1 then
+    return {
+      'replay', replay[6], replay[7], replay[8], replay[9],
+      replay[3], replay[4], replay[5]
+    }
+  end
+
+  -- The child has already rotated or been revoked. An older receipt must never
+  -- hand out dead credentials or chain forward to another generation.
+  redis.call('DEL', replay_key)
+end
+
+local active = redis.call('GET', active_key)
+if active then
+  if expected_active == '' or active ~= expected_active then
+    return {'retry'}
+  end
+
+  if redis.call('EXISTS', upstream_key) == 0 then
+    redis.call('DEL', active_key)
+    redis.call('SREM', family_refresh_key, old_refresh_token)
+    return {'upstream_missing'}
+  end
+
+  -- Preserve the old index's remaining lifetime while upgrading its value to
+  -- the structured client/issuer-bound format used by post-grace detection.
+  local old_index_ttl = redis.call('TTL', old_index_key)
+  if old_index_ttl > 0 then
+    redis.call('SET', old_index_key, old_index_value, 'EX', old_index_ttl)
+  else
+    redis.call('SET', old_index_key, old_index_value, 'EX', index_ttl)
+  end
+
+  redis.call('DEL', active_key)
+  redis.call('SREM', family_refresh_key, old_refresh_token)
+
+  redis.call('SET', new_access_key, new_access_value, 'EX', access_ttl)
+  redis.call('SET', new_refresh_key, new_refresh_value, 'EX', refresh_ttl)
+  redis.call('SET', new_index_key, new_index_value, 'EX', index_ttl)
+  redis.call('SET', family_account_key, account_id, 'EX', index_ttl)
+
+  redis.call('SADD', family_refresh_key, new_refresh_token)
+  redis.call('EXPIRE', family_refresh_key, family_ttl)
+  redis.call('SADD', family_access_key, new_access_token)
+  redis.call('EXPIRE', family_access_key, family_ttl)
+
+  redis.call(
+    'HSET', replay_key,
+    'client_id', requester_client,
+    'issuer', requester_issuer,
+    'family_id', family_id,
+    'account_id', account_id,
+    'generation', generation,
+    'access_token', new_access_token,
+    'refresh_token', new_refresh_token,
+    'token_type', 'Bearer',
+    'expires_in', access_ttl
+  )
+  redis.call('EXPIRE', replay_key, replay_ttl)
+
+  return {
+    'rotated', new_access_token, new_refresh_token, 'Bearer',
+    tostring(access_ttl), family_id, account_id, generation
+  }
+end
+
+local current_index = redis.call('GET', old_index_key)
+if not current_index then
+  return {'invalid'}
+end
+if expected_index == '' or current_index ~= expected_index then
+  return {'retry'}
+end
+
+local refresh_tokens = redis.call('SMEMBERS', family_refresh_key)
+if #refresh_tokens == 0 then
+  return {'invalid'}
+end
+local access_tokens = redis.call('SMEMBERS', family_access_key)
+
+-- Revoke the entire current family in this same atomic transition. A racing
+-- rotation therefore either happens before this burn and is deleted, or after
+-- it and sees no active parent; it can never resurrect the family.
+for _, token in ipairs(refresh_tokens) do
+  redis.call('DEL', 'mcp_refresh:' .. token)
+end
+for _, token in ipairs(access_tokens) do
+  redis.call('DEL', 'mcp_token:' .. token)
+end
+redis.call('DEL', family_refresh_key)
+redis.call('DEL', family_access_key)
+
+return {
+  'reuse', family_id, account_id,
+  tostring(#refresh_tokens), tostring(#access_tokens)
+}
+`;
 
 export interface PendingAuth {
   clientId: string;
@@ -74,6 +248,19 @@ interface StoredRefreshToken {
   issuer?: string;
 }
 
+interface StoredRefreshFamilyIndex {
+  v?: number;
+  familyId: string;
+  clientId?: string;
+  issuer?: string;
+  generation?: number;
+}
+
+type RefreshScriptResult = [
+  status: string,
+  ...values: string[],
+];
+
 export interface MintMcpTokensOpts {
   accountId: string;
   clientId: string;
@@ -106,6 +293,7 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     authCode: (code: string) => `auth_code:${code}`,
     mcpAccess: (token: string) => `mcp_token:${token}`,
     mcpRefresh: (token: string) => `mcp_refresh:${token}`,
+    mcpRefreshReplay: (token: string) => `mcp_refresh_replay:${token}`,
     rtFamilyIndex: (token: string) => `rt_family:${token}`,
     familyAccount: (familyId: string) => `rt_family_account:${familyId}`,
   };
@@ -201,70 +389,185 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     _scopes?: string[],
   ): Promise<OAuthTokens> {
     const rtKey = GojiraOAuthProvider.keys.mcpRefresh(refreshToken);
-    // Cross-instance guard, checked with a PEEK before the consuming GETDEL:
-    // consuming a sibling instance's RT here would destroy a token that is
-    // still perfectly valid at its own instance — and later legitimate use
-    // there would then trip reuse detection and revoke the whole family. The
-    // peek→getdel gap is benign: same-instance races still settle on GETDEL.
-    const peeked = await this.redis.get(rtKey);
-    if (peeked) {
-      const peekedRt = JSON.parse(peeked) as StoredRefreshToken;
-      if (peekedRt.issuer !== undefined && peekedRt.issuer !== this.config.mcpServerUrl) {
-        throw new InvalidGrantError("refresh token was issued by a different gojira-mcp instance");
+    const indexKey = GojiraOAuthProvider.keys.rtFamilyIndex(refreshToken);
+
+    // The script uses exact raw values as compare-and-swap guards, but JSON
+    // validation remains here where malformed records and legacy formats can be
+    // handled clearly. Retry only when one of those immutable records changed
+    // between this read and the atomic transition.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [activeRaw, indexRaw] = await this.redis.mget(rtKey, indexKey);
+      const active = activeRaw ? this.parseStoredRefreshToken(activeRaw) : null;
+      const index = indexRaw ? this.parseFamilyIndex(indexRaw) : null;
+
+      if (!active && !index) {
+        throw new InvalidGrantError("refresh token is invalid or revoked");
       }
-      if (peekedRt.issuer === undefined) {
-        logger.warn(
-          { accountId: peekedRt.accountId, clientId: peekedRt.clientId },
-          "Refresh token has no issuer stamp (minted pre-upgrade); accepting and re-minting with one",
+
+      if (active) {
+        this.assertRefreshBinding(active, client);
+        if (active.issuer === undefined) {
+          logger.warn(
+            { accountId: active.accountId, clientId: active.clientId },
+            "Refresh token has no issuer stamp (minted pre-upgrade); accepting and re-minting with one",
+          );
+        }
+      } else if (index) {
+        // A legacy bare family index has no client or issuer binding. It is
+        // enough to reject the stale bearer, but not enough evidence to burn a
+        // live family in a shared-Redis fleet: any sibling (or different
+        // client) could otherwise turn it into a cross-instance DoS. Active
+        // legacy RTs remain accepted above and upgrade their index on rotation.
+        if (index.clientId === undefined || index.issuer === undefined) {
+          logger.warn(
+            { familyId: index.familyId },
+            "Stale refresh token has an unbound legacy family index; refusing family revocation",
+          );
+          throw new InvalidGrantError("refresh token is invalid or revoked");
+        }
+        this.assertRefreshIndexBinding(index, client);
+      }
+
+      const familyId = active?.familyId ?? index!.familyId;
+      const accountId =
+        active?.accountId ??
+        (await this.redis.get(GojiraOAuthProvider.keys.familyAccount(familyId))) ??
+        "";
+      const generation = (active?.generation ?? index?.generation ?? 0) + 1;
+      const accessToken = randomBytes(32).toString("hex");
+      const nextRefreshToken = randomBytes(32).toString("hex");
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      const atVal: StoredAccessToken = {
+        accountId,
+        clientId: client.client_id,
+        expiresAt: nowSec + MCP_ACCESS_TTL,
+        familyId,
+        issuer: this.config.mcpServerUrl,
+      };
+      const rtVal: StoredRefreshToken = {
+        accountId,
+        clientId: client.client_id,
+        familyId,
+        generation,
+        issuer: this.config.mcpServerUrl,
+      };
+      const oldIndexVal = this.serializeFamilyIndex({
+        familyId,
+        clientId: active?.clientId ?? index?.clientId ?? client.client_id,
+        issuer: active?.issuer ?? index?.issuer ?? this.config.mcpServerUrl,
+        generation: active?.generation ?? index?.generation,
+      });
+      const nextIndexVal = this.serializeFamilyIndex({
+        familyId,
+        clientId: client.client_id,
+        issuer: this.config.mcpServerUrl,
+        generation,
+      });
+
+      const result = (await this.redis.eval(
+        ROTATE_REFRESH_TOKEN_SCRIPT,
+        10,
+        rtKey,
+        GojiraOAuthProvider.keys.mcpRefreshReplay(refreshToken),
+        indexKey,
+        `token:${accountId}`,
+        GojiraOAuthProvider.keys.mcpAccess(accessToken),
+        GojiraOAuthProvider.keys.mcpRefresh(nextRefreshToken),
+        GojiraOAuthProvider.keys.rtFamilyIndex(nextRefreshToken),
+        GojiraOAuthProvider.keys.familyAccount(familyId),
+        this.family.familyKey(familyId),
+        this.family.accessTokensKey(familyId),
+        activeRaw ?? "",
+        indexRaw ?? "",
+        client.client_id,
+        this.config.mcpServerUrl,
+        refreshToken,
+        accessToken,
+        nextRefreshToken,
+        JSON.stringify(atVal),
+        JSON.stringify(rtVal),
+        oldIndexVal,
+        nextIndexVal,
+        familyId,
+        accountId,
+        generation.toString(),
+        MCP_ACCESS_TTL.toString(),
+        MCP_REFRESH_TTL.toString(),
+        RT_FAMILY_INDEX_TTL.toString(),
+        REFRESH_FAMILY_TTL.toString(),
+        MCP_REFRESH_REPLAY_TTL.toString(),
+      )) as RefreshScriptResult;
+
+      const [status, ...values] = result;
+      if (status === "retry") continue;
+      if (status === "wrong_client") {
+        throw new InvalidClientError("refresh token was issued to a different client");
+      }
+      if (status === "wrong_issuer") {
+        throw new InvalidGrantError(
+          "refresh token was issued by a different gojira-mcp instance",
         );
       }
-    }
-    // Atomically claim the RT: only one caller can win. A concurrent replay
-    // (attacker racing the legitimate holder) loses the GETDEL and falls into
-    // the reuse-detection branch — plain GET would let both requests succeed
-    // and silently leave two live RTs in the family, defeating the alarm.
-    const stored = await this.getdel(rtKey);
-    if (!stored) {
-      const fIdx = await this.redis.get(GojiraOAuthProvider.keys.rtFamilyIndex(refreshToken));
-      if (fIdx) {
-        const familyId = this.parseFamilyIndex(fIdx);
-        const hasOthers = await this.family.hasOtherLiveRefreshTokens(familyId);
-        if (hasOthers) {
-          const accountId = await this.redis.get(
-            GojiraOAuthProvider.keys.familyAccount(familyId),
-          );
-          await this.family.destroyFamily(familyId, {
-            reason:
-              "Refresh token reuse: presented previously-rotated RT while family still has live members.",
-            accountId: accountId ?? undefined,
-            webhookUrl: this.config.refreshReuseAlertWebhook,
-          });
-        }
+      if (status === "upstream_missing") {
+        throw new InvalidGrantError("upstream credential is no longer present; re-authenticate");
       }
-      throw new InvalidGrantError("refresh token is invalid or revoked");
+      if (status === "invalid") {
+        throw new InvalidGrantError("refresh token is invalid or revoked");
+      }
+      if (status === "reuse") {
+        const [reusedFamilyId, reusedAccountId, rtCount, atCount] = values;
+        await this.family.reportReuse(
+          reusedFamilyId!,
+          {
+            reason:
+              "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
+            accountId: reusedAccountId || undefined,
+            webhookUrl: this.config.refreshReuseAlertWebhook,
+          },
+          {
+            refreshTokensRevoked: Number(rtCount),
+            accessTokensRevoked: Number(atCount),
+          },
+        );
+        throw new InvalidGrantError("refresh token is invalid or revoked");
+      }
+      if (status === "rotated" || status === "replay") {
+        const [returnedAccess, returnedRefresh, tokenType, expiresIn, resultFamilyId, resultAccountId, resultGeneration] =
+          values;
+        if (status === "replay") {
+          logger.info(
+            {
+              event: "REFRESH_TOKEN_IDEMPOTENT_REPLAY",
+              familyId: resultFamilyId,
+              accountId: resultAccountId,
+              clientId: client.client_id,
+              generation: Number(resultGeneration),
+            },
+            "Concurrent refresh-token replay accepted within idempotency window",
+          );
+        } else {
+          logger.debug(
+            {
+              accountId: resultAccountId,
+              familyId: resultFamilyId,
+              generation: Number(resultGeneration),
+            },
+            "Minted MCP token pair",
+          );
+        }
+        return {
+          access_token: returnedAccess!,
+          token_type: tokenType!,
+          expires_in: Number(expiresIn),
+          refresh_token: returnedRefresh!,
+        };
+      }
+
+      throw new ServerError("refresh-token rotation returned an unknown state");
     }
-    const rt = JSON.parse(stored) as StoredRefreshToken;
-    if (rt.clientId !== client.client_id) {
-      throw new InvalidClientError("refresh token was issued to a different client");
-    }
 
-    // RT is already consumed by the GETDEL above; drop it from the family set.
-    await this.family.removeRefreshToken(rt.familyId, refreshToken);
-
-    const upstreamKey = `token:${rt.accountId}`;
-    const upstreamExists = await this.redis.exists(upstreamKey);
-    if (!upstreamExists) {
-      throw new InvalidGrantError("upstream credential is no longer present; re-authenticate");
-    }
-
-    const minted = await this.mintMcpTokens({
-      accountId: rt.accountId,
-      clientId: rt.clientId,
-      familyId: rt.familyId,
-      generation: rt.generation + 1,
-    });
-
-    return minted;
+    throw new ServerError("refresh-token rotation contention did not settle");
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
@@ -339,26 +642,81 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     return JSON.parse(raw) as { pendingAuthId: string };
   }
 
-  /** Atomic read-and-delete (Redis GETDEL). Used for one-time-use artifacts (codes, state, RTs). */
+  /** Atomic read-and-delete (Redis GETDEL) for one-time auth codes and state. */
   private getdel(key: string): Promise<string | null> {
     return this.redis.getdel(key);
   }
 
-  /**
-   * The rt_family index historically stored the bare familyId string; we keep
-   * that format so existing tokens keep working. Parse defensively in case a
-   * future format is introduced.
-   */
-  private parseFamilyIndex(raw: string): string {
+  private parseStoredRefreshToken(raw: string): StoredRefreshToken {
+    try {
+      const token = JSON.parse(raw) as Partial<StoredRefreshToken>;
+      if (
+        typeof token.accountId !== "string" ||
+        typeof token.clientId !== "string" ||
+        typeof token.familyId !== "string" ||
+        typeof token.generation !== "number"
+      ) {
+        throw new Error("required fields are missing");
+      }
+      return token as StoredRefreshToken;
+    } catch (err) {
+      throw new ServerError(
+        `stored refresh token is malformed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Legacy indexes are bare family ids; newly written indexes are bound. */
+  private parseFamilyIndex(raw: string): StoredRefreshFamilyIndex {
     if (raw.startsWith("{")) {
       try {
-        const o = JSON.parse(raw) as { familyId?: string };
-        if (o.familyId) return o.familyId;
+        const parsed = JSON.parse(raw) as Partial<StoredRefreshFamilyIndex>;
+        if (typeof parsed.familyId === "string") {
+          return parsed as StoredRefreshFamilyIndex;
+        }
       } catch {
         /* fall through */
       }
     }
-    return raw;
+    return { familyId: raw };
+  }
+
+  private serializeFamilyIndex(index: StoredRefreshFamilyIndex): string {
+    return JSON.stringify({
+      v: 2,
+      familyId: index.familyId,
+      clientId: index.clientId,
+      issuer: index.issuer,
+      generation: index.generation,
+    });
+  }
+
+  private assertRefreshBinding(
+    token: StoredRefreshToken,
+    client: OAuthClientInformationFull,
+  ): void {
+    if (token.clientId !== client.client_id) {
+      throw new InvalidClientError("refresh token was issued to a different client");
+    }
+    if (token.issuer !== undefined && token.issuer !== this.config.mcpServerUrl) {
+      throw new InvalidGrantError(
+        "refresh token was issued by a different gojira-mcp instance",
+      );
+    }
+  }
+
+  private assertRefreshIndexBinding(
+    index: StoredRefreshFamilyIndex,
+    client: OAuthClientInformationFull,
+  ): void {
+    if (index.clientId !== undefined && index.clientId !== client.client_id) {
+      throw new InvalidClientError("refresh token was issued to a different client");
+    }
+    if (index.issuer !== undefined && index.issuer !== this.config.mcpServerUrl) {
+      throw new InvalidGrantError(
+        "refresh token was issued by a different gojira-mcp instance",
+      );
+    }
   }
 
   async getPendingAuth(id: string): Promise<PendingAuth | null> {
@@ -404,7 +762,12 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     pipeline.set(GojiraOAuthProvider.keys.mcpRefresh(refreshToken), JSON.stringify(rtVal), "EX", MCP_REFRESH_TTL);
     pipeline.set(
       GojiraOAuthProvider.keys.rtFamilyIndex(refreshToken),
-      familyId,
+      this.serializeFamilyIndex({
+        familyId,
+        clientId: opts.clientId,
+        issuer: this.config.mcpServerUrl,
+        generation,
+      }),
       "EX",
       RT_FAMILY_INDEX_TTL,
     );

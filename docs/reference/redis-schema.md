@@ -11,7 +11,8 @@ TTLs and types are exact; sizes are typical.
 | `auth_code:<code>` | String (JSON) | 5 min | none | gojira-issued auth code. **Consumed via `GETDEL`.** |
 | `mcp_token:<at>` | String (JSON) | 1 hour | none | MCP access token → `{ accountId, clientId, expiresAt, familyId, issuer }`. `issuer` = the minting instance's `MCP_SERVER_URL`; `verifyAccessToken` rejects a mismatch (split-surface fleets share this Redis), and a missing field (pre-upgrade token) is accepted. |
 | `mcp_refresh:<rt>` | String (JSON) | 30 days | none | MCP refresh token → `{ accountId, clientId, familyId, generation, issuer }`. Issuer contract as above; a sibling instance's exchange is refused *without* consuming the token. |
-| `rt_family:<rt>` | String | 31 days | none | Per-RT pointer to its family. Outlives the RT for reuse-detection grace. |
+| `rt_family:<rt>` | String (JSON) | 31 days | none | Versioned per-RT index → `{ v: 2, familyId, clientId, issuer, generation }`. Outlives the RT for bound reuse detection. Legacy bare-family strings remain readable; an active legacy RT upgrades its index on rotation, while an unbound stale index is rejected without family revocation. |
+| `mcp_refresh_replay:<oldRt>` | Hash | 5 seconds, fixed | none | Exact immediate-successor AT/RT receipt plus `client_id`, `issuer`, `family_id`, `account_id`, and `generation`. A valid duplicate gets this pair only while the child AT, RT, and family membership remain live. Reads never extend the TTL. |
 | `rt_family_account:<familyId>` | String (accountId) | 31 days | none | Family → account map. Outlives the RTs so reuse detection can still attribute the incident to a user after the presented RT's blob is gone. |
 | `refresh_family:<familyId>` | Set | 30 days | none | Currently-live RT ids in the family. |
 | `refresh_family_tokens:<familyId>` | Set | 30 days | none | Currently-live AT ids in the family. |
@@ -47,11 +48,15 @@ Only a handful of paths use atomic operations beyond simple `SET/GET`:
 
 - `GETDEL` for one-time-use consumption: `atlassian_state:*`,
   `auth_code:*`.
+- One Lua compare-and-swap transition for MCP RT rotation. It validates a
+  five-second replay receipt, consumes the parent and creates its successor,
+  or atomically burns a stale token family so a racing rotation cannot
+  resurrect it.
 - Lua eval for the rate-limiter (`BUCKET_SCRIPT`, `FEEDBACK_SCRIPT`).
 - Lua compare-and-delete for the upstream-refresh lock release.
-- Pipelines for token mint (`mcp_token:*`, `mcp_refresh:*`,
-  `rt_family:*`, `rt_family_account:*` set together) and for journal
-  write (`op_journal:*` + `op_journal_idx:*`).
+- Pipelines for initial token mint (`mcp_token:*`, `mcp_refresh:*`,
+  `rt_family:*`, `rt_family_account:*`) and for journal write
+  (`op_journal:*` + `op_journal_idx:*`).
 
 ## Garbage collection
 
@@ -130,8 +135,12 @@ docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" \
 
 ## Migration notes
 
-There is no migration story today — this is v0. Future schema changes
-should:
+The version-2 `rt_family:<rt>` index is migrated lazily: active legacy RTs
+remain accepted and rewrite their old and successor indexes during rotation.
+An already-stale bare index lacks trustworthy client/issuer binding, so it is
+rejected without revoking the live family and expires naturally after 31 days.
+
+For future schema changes:
 
 - Use new key prefixes rather than mutating existing ones.
 - Provide a one-shot migrator script under `scripts/`.

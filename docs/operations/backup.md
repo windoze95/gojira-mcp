@@ -8,6 +8,7 @@ What's worth backing up, why, and how to restore.
 |---|---|
 | `oauth_client:*` (registered MCP clients) | Medium — losing them means clients re-register, which most do automatically. |
 | `pending_auth:*`, `atlassian_state:*`, `auth_code:*` | Skip — short TTL (5-10 min), in-flight only. |
+| `mcp_refresh_replay:*` | Skip — fixed five-second idempotency receipts; in-flight only. |
 | `mcp_token:*`, `mcp_refresh:*`, `rt_family:*`, `rt_family_account:*`, `refresh_family:*`, `refresh_family_tokens:*` | Low — losing them forces clients to re-`/authorize`, but no permanent data is destroyed. |
 | `token:<accountId>` (encrypted Atlassian credentials) | High — losing them forces re-auth across all users. Useless without `TOKEN_ENCRYPTION_KEY`. |
 | `apitoken:<accountId>` (encrypted API tokens) | High — same as above. |
