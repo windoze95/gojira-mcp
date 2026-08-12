@@ -13,9 +13,9 @@ Connect/Forge app credential · **UI** = no public API at any auth level.
 
 | Capability | Channel | Notes |
 |---|---|---|
-| Analyze incidents/requests (detail, status, transitions, approvals, comments) | REST‑OAuth / token | all 200 |
+| Analyze requests (work-item detail and comments; status/transition/approval primitives remain wireable) | REST‑OAuth / token | Detail + comments ship as `workitems.read`; comment writes as `workitems.manageComment`. |
 | Read logs / history (issue changelog, SLA **state**) | REST‑OAuth / token | 200 |
-| JQL search across issues/requests | REST‑OAuth / token | 200 |
+| JQL search across work items/requests | REST‑OAuth / token | Shipped as token-paged `workitems.search` (direct JQL or saved filter). |
 | Request types — list/get/**create**/**delete** | **REST‑token** | create=201, delete=204 via the admin API token; OAuth 401s. gojira's JSM tools already use the token path. |
 | Request‑type fields & groups (read) | REST‑token | 200 |
 | Queues — list/get/issues | REST‑token | read‑only (create/update/delete = 405) |
@@ -25,6 +25,7 @@ Connect/Forge app credential · **UI** = no public API at any auth level.
 | Assets / CMDB | REST‑OAuth | needs the `cmdb-*:jira` granular scopes |
 | Confluence spaces/templates/restrictions | **REST‑token** | verified live via the site host + API token (v1+v2 both 200). OAuth can't run these: v2 401s without granular scopes and the v1 space API is **410 Gone** on the OAuth host. `setContentRestrictions` writes need a paid Confluence plan (403 on Free). |
 | **Portal request forms + IT‑support forms** | **REST‑token** | JSM **Forms API** Basic‑auth host (`api.atlassian.com/jira/forms/cloud/{cloudId}`) works with the admin API token — **no OAuth scope needed**. Full template lifecycle verified live (create 200 → export → update → delete → 404). Shipped as the `forms.*` tools. |
+| Request-build review bundle | REST‑token | `jsm.inspectRequestBuild` assembles request type, fields/groups, attached form, work type/workflow scheme, automation, optional tracking work item, review links, and configuration readiness without claiming live verification. |
 
 ## ✅ Automation rules — reachable via REST (corrected finding)
 

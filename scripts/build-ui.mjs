@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ENTRIES = ["confirm-op", "journal", "aql-table", "automation-rule"];
+const ENTRIES = ["confirm-op", "journal", "aql-table", "automation-rule", "request-build"];
 
 const outDir = join(root, "ui", "dist");
 mkdirSync(outDir, { recursive: true });

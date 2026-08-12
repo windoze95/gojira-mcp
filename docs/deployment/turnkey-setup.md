@@ -46,7 +46,7 @@ some scopes live under the **Granular scopes** tab.
 
 | Permission group(s) | API | Scopes to add |
 |---|---|---|
-| `read_projects` `write_projects` `delete_projects` `read_schemes` `write_schemes` `read_customfields` `write_customfields` `read_filters_dashboards` `write_filters_dashboards` `read_agile` `write_agile` | Jira (classic) | `read:jira-work` `write:jira-work` `manage:jira-project` `manage:jira-configuration` |
+| `read_projects` `write_projects` `delete_projects` `read_workitems` `write_workitems` `read_schemes` `write_schemes` `read_customfields` `write_customfields` `read_filters_dashboards` `write_filters_dashboards` `read_agile` `write_agile` | Jira (classic) | `read:jira-work` `write:jira-work` `manage:jira-project` `manage:jira-configuration` |
 | `read_workflows` `write_workflows` | Jira (classic) | `manage:jira-configuration` (workflow reads/writes + scheme publish) |
 | `read_jsm_admin` `write_jsm_admin` | — (uses the bound per-user API token, not OAuth) | **No OAuth scopes needed.** Every tool in these groups (`jsm.*` and `forms.*`) authenticates with the bound API token via the site host (Basic) — no OAuth token is ever presented, so the classic `*:servicedesk-request` scopes buy nothing here. Bind the token per §9. |
 | `read_confluence_admin` `write_confluence_admin` | — (uses the bound per-user API token, not OAuth) | **No OAuth scopes needed.** Confluence admin tools authenticate with the bound API token via the site host (Basic). Verified live: the OAuth host 401s v2 reads without granular scopes and returns **410 Gone** for the v1 space API these tools need, so the token path is the only complete one. Note: `setContentRestrictions` requires a paid Confluence plan (403 on Free). |
@@ -82,7 +82,7 @@ MCP_SERVER_URL=https://<your-host>
 ALLOWED_ORIGINS=https://<your-mcp-client-origin>       # avoid '*' in prod
 NODE_ENV=production
 REDIS_PASSWORD=<a strong password>
-GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
+GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_workitems,write_workitems,read_assets,write_assets,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
 ```
 
 > Find `<cloudId>` at `https://<your-site>.atlassian.net/_edge/tenant_info`.

@@ -103,7 +103,7 @@ TOKEN_ENCRYPTION_KEY=<base64 from step 2>
 ALLOWED_ORIGINS=*
 MCP_SERVER_URL=https://gojira.example.com
 REDIS_PASSWORD=<random 32-byte hex>
-GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
+GOJIRA_ENABLED_GROUPS=utility,read_jsm_admin,write_jsm_admin,read_workitems,write_workitems,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards
 ```
 
 The CMDB + `read:servicedesk-request` scopes above are there because this

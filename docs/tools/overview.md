@@ -1,7 +1,7 @@
 # Tools overview
 
-gojira-mcp exposes **61 op-parameterized tools carrying 155 operations**,
-spread across **23 permission groups** (including `utility`, which every
+gojira-mcp exposes **65 tools carrying 162 operations**,
+spread across **25 permission groups** (including `utility`, which every
 deployment should list explicitly — nothing auto-injects it). Most tools
 bundle 2-7 related operations behind a required `op` enum field (built via
 `defineOpTool`); single-purpose tools use plain `defineTool`. Definitions
@@ -11,7 +11,7 @@ live in `src/tools/defs/*.ts`.
 
 | Doc | Theme | Tools (operations) | Tool names start with |
 |---|---|---|---|
-| [Daily admin](daily-admin.md) | JSM, Forms, Assets, Automation, Custom fields, Projects (read/create/archive) | 26 (~90 ops) | `jsm.`, `forms.`, `assets.`, `automation.`, `customfields.`, `projects.` |
+| [Daily admin](daily-admin.md) | JSM, Forms, work items, Assets, Automation, Custom fields, Projects (read/create/archive) | 29 (78 ops) | `jsm.`, `forms.`, `workitems.`, `assets.`, `automation.`, `customfields.`, `projects.` |
 | [Schemes and workflows](schemes-and-workflows.md) | Schemes, workflows + publish, Confluence admin, project deletion | 15 (~42 ops) | `schemes.`, `workflows.`, `confluence.`, `projects.delete` |
 | [Agile and views](agile-and-views.md) | Boards, sprints, epics, filters, dashboards | 8 (18 ops) | `agile.`, `filters.`, `dashboards.` |
 | [Org admin](org-admin.md) | `admin.atlassian.com` (gated separately) | 6 (17 ops) | `orgAdmin.` |
@@ -37,6 +37,7 @@ maps every pre-collapse tool name to its current tool + op.
 |---|---|
 | `gojira.` | utility |
 | `jsm.` | read_jsm_admin, write_jsm_admin |
+| `workitems.` | read_workitems, write_workitems |
 | `assets.` | read_assets, write_assets |
 | `automation.` | read_automation, write_automation |
 | `customfields.` | read_customfields, write_customfields |
@@ -120,17 +121,17 @@ enforces manifest-driven revert coverage.
 
 ## Practical surface size
 
-The collapse (155 per-endpoint tools → 61) put every deployment shape
+The collapsed catalog plus focused work-item primitives put every deployment shape
 under the tool-count thresholds where model selection degrades, and the
 split-surface fleet keeps every *connected* surface under ~30:
 
 - **Tighten the allowlist:** set `GOJIRA_ENABLED_GROUPS` to exactly the
   groups this deployment needs. A read-only audit deployment (`utility`
-  + the `read_*` groups) advertises 26 tools.
+  + the `read_*` groups) advertises 29 tools.
 - **One deployment per use-case:** the split-surface fleet
-  ([README Pattern 8](../../README.md#pattern-8--split-surface-fleet--26262119-12-tools),
+  ([README Pattern 8](../../README.md#pattern-8--split-surface-fleet--29302119-12-tools),
   [profiles guide](../deployment/profiles.md)) runs one instance per
-  workflow batch — 26/26/21/19/12 tools per profile.
+  workflow batch — 29/30/21/19/12 tools per profile.
 - **Use `gojira.listEnabledTools`** at runtime (with
   `available_only: true` for just this instance's surface) to verify the
   surface matches the use case; each tool row lists its `ops`.

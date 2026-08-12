@@ -1,6 +1,6 @@
 # Adding an operation
 
-The surface is **61 tools carrying 155 operations**. Most tools are
+The surface is **65 tools carrying 162 operations**. Most tools are
 op-parameterized: one MCP tool holding 2–7 operations selected by a
 required `op` field, built by the `defineOpTool` factory in
 `src/tools/defs/defineOpTool.ts`.
@@ -282,7 +282,7 @@ Two things differ from an op tool:
 
 **Annotations are purely flag-driven.** The leaf-verb regex that used to
 infer read-only-ness from a `list*` / `get*` name is **gone** — every one
-of the 61 tools carries an explicit truth. `destructive: true` yields
+of the 65 tools carries an explicit truth. `destructive: true` yields
 `readOnlyHint: false` + `destructiveHint: true`; an explicit
 `readOnly: true` yields `readOnlyHint: true`; neither yields *no
 annotations at all*, so hosts confirm by default. A read tool that

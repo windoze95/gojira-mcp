@@ -13,7 +13,7 @@ Renders in: claude.ai web, Claude Desktop, Claude iOS/Android, ChatGPT
 (developer mode / workspace connectors), VS Code Copilot, and other MCP Apps
 hosts. Notably **not** Claude Code — CLI/IDE chat stays text-only.
 
-## The four templates
+## The five templates
 
 | Template | Attached to | What it does |
 |---|---|---|
@@ -21,6 +21,7 @@ hosts. Notably **not** Claude Code — CLI/IDE chat stays text-only.
 | `ui://gojira/journal.html` | `gojira.readJournal` (ops `listRecentOperations`, `getOperation`) | Operation timeline with expandable detail (client-computed before/after patch) and a dry-run-first **Revert** flow for revertible entries. |
 | `ui://gojira/aql-table.html` | `assets.aqlSearch` | Results table with dynamic attribute columns (from `objectTypeAttributes`), a column picker, per-page sort, and Prev/Next paging via re-invocation. |
 | `ui://gojira/automation-rule.html` | `automation.readRule` (ops `listAutomationRules`, `getAutomationRule`) | Rule list (cursor paging) and trigger → conditions/branches → actions tree with raw value expanders. |
+| `ui://gojira/request-build.html` | `jsm.inspectRequestBuild` | Readiness card, per-piece review table, canonical form/automation/portal/tracking links, and raw detail expanders. |
 
 A template attaches to the whole collapsed tool, not to one op, so one view
 renders every op it declares — the journal template handles both the list and
@@ -74,6 +75,12 @@ Revert previews the reverse patch before anything is applied:
 ![Automation rule list](../assets/ui/automation-rule-list.png)
 
 ![Automation rule tree](../assets/ui/automation-rule-tree.png)
+
+### Request build (`ui://gojira/request-build.html`)
+
+Renders the inspector's configuration state and makes each associated piece
+easy to open or expand. It keeps the live-verification warning visible even
+when the build is `configured_unverified`.
 
 ### Theming
 

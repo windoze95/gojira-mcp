@@ -68,7 +68,9 @@ gojira-mcp/
 │           │                          # counts below are `tools (ops)`
 │           ├── utility.ts             # gojira.* — 6 (7)
 │           ├── jsm.ts                 # jsm.* — 4 (16)
+│           ├── requestBuild.ts        # jsm.inspectRequestBuild — 1 (1)
 │           ├── forms.ts               # forms.* — 3 (8)
+│           ├── workitems.ts           # workitems.* — 3 (6)
 │           ├── assets.ts              # assets.* — 7 (23)
 │           ├── automation.ts          # automation.* — 6 (11)
 │           ├── customfields.ts        # customfields.* — 3 (8)

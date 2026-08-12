@@ -15,8 +15,8 @@ tool surface.
 
 | Profile | Port | Tools | Groups beyond `utility` |
 |---|---|---|---|
-| `gojira-readonly` | 8081 | 26 | all 10 `read_*` groups |
-| `gojira-service` | 8082 | 26 | `read/write_jsm_admin`, `read/write_assets`, `read/write_automation` |
+| `gojira-readonly` | 8081 | 29 | all 11 `read_*` groups |
+| `gojira-service` | 8082 | 30 | `read/write_jsm_admin`, `read/write_workitems`, `read/write_assets`, `read/write_automation` |
 | `gojira-platform` | 8083 | 21 | `read/write_customfields`, `read/write_projects`, `read/write_schemes`, `read/write_workflows` (`delete_projects` commented opt-in → 22) |
 | `gojira-workspace` | 8084 | 19 | `read/write_agile`, `read/write_filters_dashboards`, `read/write_confluence_admin` |
 | `gojira-org` | 8085 | 12 | `admin_org` (+ `GOJIRA_ENABLE_ORG_ADMIN=true`); opt-in via `--profile org` |
