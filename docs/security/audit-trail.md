@@ -64,7 +64,7 @@ argument. Audit records follow the wire, not the old catalog —
   Anything that used to key on the per-endpoint tool name now keys on the
   `tool` + `request.op` pair.
 
-Cardinality dropped accordingly: 61 tool names covering 155 operations. If
+Cardinality is 65 tool names covering 162 operations. If
 you have alerts, dashboards, or retention rules that enumerate tool names,
 they need the new pair — a rule matching `customfields.createCustomField`
 will silently match nothing rather than fail.

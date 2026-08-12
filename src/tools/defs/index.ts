@@ -13,11 +13,15 @@ import { deleteProjectTools } from "./deleteProjects.js";
 import { agileTools } from "./agile.js";
 import { filterDashboardTools } from "./filtersDashboards.js";
 import { orgAdminTools } from "./orgAdmin.js";
+import { workitemTools } from "./workitems.js";
+import { requestBuildTools } from "./requestBuild.js";
 
 export function allTools(): AnyToolDef[] {
   return [
     ...utilityTools(),
     ...jsmTools(),
+    ...workitemTools(),
+    ...requestBuildTools(),
     ...formsTools(),
     ...assetsTools(),
     ...automationTools(),

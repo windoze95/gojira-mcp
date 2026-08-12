@@ -44,7 +44,7 @@ export const OUTPUT_ENVELOPE_SHAPE = {
  * an explicit `readOnly: true` (set by defineOpTool on collapsed read tools
  * and declared on read keepers) engages readOnlyHint, and anything else stays
  * unannotated so hosts confirm by default. The pre-collapse leaf-verb regex is
- * gone — every one of the 61 tools carries an explicit truth.
+ * gone — every tool carries an explicit truth.
  */
 function deriveAnnotations(def: ToolDefinition<z.ZodTypeAny, unknown>): ToolAnnotations | undefined {
   // openWorldHint: false throughout — every tool targets the deployment's own

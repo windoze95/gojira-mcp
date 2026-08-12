@@ -12,16 +12,17 @@ import {
   AQL_TABLE_UI_URI,
   CONFIRM_OP_UI_URI,
   JOURNAL_UI_URI,
+  REQUEST_BUILD_UI_URI,
   resetUiAssetsCacheForTests,
 } from "../../src/ui/appResources.js";
 import type { ToolDeps } from "../../src/tools/types.js";
 
-const UI_FILES = ["confirm-op.html", "journal.html", "aql-table.html", "automation-rule.html"];
+const UI_FILES = ["confirm-op.html", "journal.html", "aql-table.html", "automation-rule.html", "request-build.html"];
 
 function makeDeps(uiEnabled: boolean): ToolDeps {
   return {
     config: {
-      enabledGroups: ["utility", "read_assets", "read_automation", "delete_projects"],
+      enabledGroups: ["utility", "read_jsm_admin", "read_assets", "read_automation", "delete_projects"],
       orgAdmin: { enabled: false, orgId: null },
       ui: { enabled: uiEnabled },
     },
@@ -71,6 +72,7 @@ describe("MCP Apps resources + tool metadata (end-to-end over a real session)", 
 
     expect(byName.get("assets.aqlSearch")!._meta?.ui).toEqual({ resourceUri: AQL_TABLE_UI_URI });
     expect(byName.get("gojira.readJournal")!._meta?.ui).toEqual({ resourceUri: JOURNAL_UI_URI });
+    expect(byName.get("jsm.inspectRequestBuild")!._meta?.ui).toEqual({ resourceUri: REQUEST_BUILD_UI_URI });
     expect(byName.get("gojira.readJournal")!.annotations).toMatchObject({ readOnlyHint: true });
 
     // Read tool without a template: no UI meta at all.
@@ -82,7 +84,7 @@ describe("MCP Apps resources + tool metadata (end-to-end over a real session)", 
     const { resources } = await client.listResources();
     const uris = resources.map((r) => r.uri).sort();
     expect(uris).toEqual(
-      [CONFIRM_OP_UI_URI, JOURNAL_UI_URI, AQL_TABLE_UI_URI, "ui://gojira/automation-rule.html"].sort(),
+      [CONFIRM_OP_UI_URI, JOURNAL_UI_URI, AQL_TABLE_UI_URI, REQUEST_BUILD_UI_URI, "ui://gojira/automation-rule.html"].sort(),
     );
 
     const read = await client.readResource({ uri: CONFIRM_OP_UI_URI });

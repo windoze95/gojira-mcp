@@ -85,7 +85,7 @@ function e2eConfig(creds: E2ECreds): AppConfig {
     ALLOWED_ORIGINS: "http://localhost:0",
     ATLASSIAN_PINNED_CLOUD_ID: creds.cloudId,
     GOJIRA_ENABLED_GROUPS:
-      "utility,read_jsm_admin,write_jsm_admin,read_automation,write_automation," +
+      "utility,read_jsm_admin,write_jsm_admin,read_workitems,write_workitems,read_automation,write_automation," +
       "read_confluence_admin,write_confluence_admin,read_assets,write_assets," +
       "read_projects,write_projects,read_schemes,write_schemes,read_workflows," +
       "write_workflows,read_customfields,write_customfields,read_agile,write_agile," +

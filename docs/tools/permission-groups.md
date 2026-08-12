@@ -23,6 +23,8 @@ unless it's named.
 | `write_schemes` | Jira | 3 (7 ops) | oauth | Create/update/delete schemes + project assignments |
 | `read_workflows` | Jira | 1 (6 ops) | oauth | List/get workflows + transition components |
 | `write_workflows` | Jira | 3 (5 ops) | oauth | Create/update/delete workflows, transitions, publish |
+| `read_workitems` | Jira | 2 (3 ops) | oauth | JQL/saved-filter search, work-item detail, comments |
+| `write_workitems` | Jira | 1 (3 ops) | oauth | Dry-run-first comment create/update/marker-upsert |
 | `read_automation` | Jira | 3 (5 ops) | api_token | List/get rules, manual-rule search, rule templates |
 | `write_automation` | Jira | 3 (6 ops) | api_token | Create (incl. from template)/update/delete/enable/disable rules |
 | `read_customfields` | Jira | 1 (3 ops) | oauth | List/get fields and their contexts |
@@ -31,7 +33,7 @@ unless it's named.
 | `write_filters_dashboards` | Jira | 4 (6 ops) | oauth | Create/update/delete filters and dashboards |
 | `read_agile` | Jira Software | 1 (6 ops) | oauth | Boards, sprints, epics — read |
 | `write_agile` | Jira Software | 1 (2 ops) | oauth | Create/update sprints |
-| `read_jsm_admin` | Jira Service Management | 3 (17 ops) | api_token | List/get for service desks, queues, SLA state, forms, etc. |
+| `read_jsm_admin` | Jira Service Management | 4 (18 ops) | api_token | Service desks, queues, SLA state, forms, and request-build inspection |
 | `write_jsm_admin` | Jira Service Management | 4 (7 ops) | api_token | Create/update/delete for the same surface incl. form templates |
 | `read_assets` | Assets (JSM add-on) | 3 (10 ops) | oauth | Read for Assets/Insight schemas, types, objects |
 | `write_assets` | Assets (JSM add-on) | 4 (13 ops) | oauth | Mutate Assets data and schema |
@@ -70,9 +72,9 @@ conditional — is what removes deletion from a surface.
 
 | Deployment shape | `GOJIRA_ENABLED_GROUPS` |
 |---|---|
-| Day-to-day admin (operators + automation) | `utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards` |
-| Read-only audit | `utility,read_jsm_admin,read_assets,read_automation,read_customfields,read_projects,read_schemes,read_workflows,read_confluence_admin,read_agile,read_filters_dashboards` |
-| JSM specialist | `utility,read_jsm_admin,write_jsm_admin,read_assets,write_assets` |
+| Day-to-day admin (operators + automation) | `utility,read_jsm_admin,write_jsm_admin,read_workitems,write_workitems,read_assets,write_assets,read_automation,write_automation,read_customfields,write_customfields,read_projects,write_projects,read_schemes,write_schemes,read_workflows,write_workflows,read_confluence_admin,write_confluence_admin,read_agile,write_agile,read_filters_dashboards,write_filters_dashboards` |
+| Read-only audit | `utility,read_jsm_admin,read_workitems,read_assets,read_automation,read_customfields,read_projects,read_schemes,read_workflows,read_confluence_admin,read_agile,read_filters_dashboards` |
+| JSM specialist | `utility,read_jsm_admin,write_jsm_admin,read_workitems,write_workitems,read_assets,write_assets` |
 | Org-admin (separate instance) | `utility,admin_org` (pair with `GOJIRA_ENABLE_ORG_ADMIN=true` and a separate audit channel) |
 | Local development | same as Day-to-day admin |
 

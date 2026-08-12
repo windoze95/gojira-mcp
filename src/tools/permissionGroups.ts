@@ -14,6 +14,8 @@ export const ALL_PERMISSION_GROUPS = [
   "utility",
   "read_jsm_admin",
   "write_jsm_admin",
+  "read_workitems",
+  "write_workitems",
   "read_assets",
   "write_assets",
   "read_automation",

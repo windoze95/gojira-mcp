@@ -21,6 +21,7 @@ export const CONFIRM_OP_UI_URI = "ui://gojira/confirm-op.html";
 export const JOURNAL_UI_URI = "ui://gojira/journal.html";
 export const AQL_TABLE_UI_URI = "ui://gojira/aql-table.html";
 export const AUTOMATION_RULE_UI_URI = "ui://gojira/automation-rule.html";
+export const REQUEST_BUILD_UI_URI = "ui://gojira/request-build.html";
 
 interface UiAsset {
   uri: string;
@@ -58,6 +59,13 @@ const UI_ASSETS: UiAsset[] = [
     description:
       "Automation rule list and trigger/conditions/actions tree view for a single rule.",
   },
+  {
+    uri: REQUEST_BUILD_UI_URI,
+    file: "request-build.html",
+    name: "JSM request-build inspector",
+    description:
+      "Review table for one request build: readiness, request type, form, work type/workflow, automation, tracking work item, and canonical development links.",
+  },
 ];
 
 const ASSET_BY_URI = new Map(UI_ASSETS.map((a) => [a.uri, a]));
@@ -74,7 +82,7 @@ const htmlCache = new Map<string, string>();
 
 /**
  * True when every UI template bundle exists on disk. Cached for the process
- * lifetime — sessions register per-connection and must not re-stat four files
+ * lifetime — sessions register per-connection and must not re-stat every bundle
  * each time. When false (and the flag is on), UI metadata and resources are
  * simply not registered; the server stays fully functional as text-only.
  */

@@ -1,11 +1,11 @@
 # Daily admin tools
 
 Day-to-day Atlassian Cloud admin: JSM service-desk configuration,
-Assets/Insight CMDB, Jira automation rules, custom fields, and the safe
+work-item review/comments, Assets/Insight CMDB, Jira automation rules, custom fields, and the safe
 project-management surface (create + archive; delete is in its own group
 covered in [schemes-and-workflows.md](schemes-and-workflows.md)).
 
-25 tools carrying 71 operations across 10 permission groups. Most are
+29 tools carrying 78 operations across 12 permission groups. Most are
 op-parameterized — one tool, several operations selected by a required
 `op` field, called as `{ "op": "…", …args }`. The auto-generated
 [catalog](catalog.md) has every input schema.
@@ -30,6 +30,18 @@ field set behind a request type), and `getRequestTypeGroups`.
 | `getRequestSla` | keyed by ISSUE (`issueIdOrKey`), not by desk. Per-request SLA *state* only; goal *configuration* has no public API (see the [capability map](../architecture/jsm-capability-map.md)) |
 | `listJsmOrganizations` | global when `serviceDeskId` is omitted |
 | `searchKnowledgeBaseArticles` | article *linking* is UI-only |
+
+### `jsm.inspectRequestBuild` — one-call development review
+
+Reads one request type and assembles its fields, request-type groups,
+attached ProForma form, underlying work type and workflow-scheme association,
+explicit automation rules (or name/id candidates), optional tracking work item,
+and canonical portal/admin review links. Sensitive automation keys are redacted.
+
+Readiness is deliberately limited to `incomplete`, `staged`, `needs_review`,
+or `configured_unverified`. The tool never calls a build "live" from
+configuration alone; its result includes the remaining portal submission,
+automation terminal-branch, resulting-status, and notification checks.
 
 ### `jsm.manage` — additions (destructive, `commit`-gated)
 
@@ -88,6 +100,23 @@ Full template lifecycle verified live.
 Single-op tool, so no `op` field: `{ projectIdOrKey, formId, commit: true }`.
 **Irreversible** — the full template, design included, is captured in the
 journal `before`.
+
+## Work items (`read_workitems` / `write_workitems`)
+
+**Credential:** OAuth (`read:jira-work`; comment writes also need
+`write:jira-work`). The public MCP vocabulary follows Jira's current UI:
+*work item*, *work type*, and *space*. The adapter still calls Atlassian's
+compatibility REST paths (`/issue`, `issueType`, `project`) internally.
+
+- `workitems.search` — JQL or a saved filter id, with optional extra JQL.
+  Follows enhanced-search `nextPageToken` pages and stops at `maxItems`.
+- `workitems.read` — `getWorkItem(workItemIdOrKey)` or
+  `listComments(workItemIdOrKey)`.
+- `workitems.manageComment` — destructive, `commit`-gated, and revertible:
+  `createComment`, `updateComment`, or `upsertComment`. Bodies may be plain
+  text (converted to ADF) or supplied as ADF. New comments default to
+  JSM-internal visibility. `upsertComment` stores a stable marker in a Jira
+  comment entity property and fails closed if duplicate markers exist.
 
 ## Assets / Insight (`read_assets` / `write_assets`)
 
