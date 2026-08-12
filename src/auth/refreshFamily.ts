@@ -76,14 +76,33 @@ export class RefreshFamily {
     pipeline.del(this.accessTokensKey(familyId));
     await pipeline.exec();
 
+    const counts = {
+      refreshTokensRevoked: refreshTokens.length,
+      accessTokensRevoked: accessTokens.length,
+    };
+    await this.reportReuse(familyId, opts, counts);
+    return counts;
+  }
+
+  /**
+   * Emit the audit-grade reuse signal after a caller has already revoked the
+   * family atomically (the refresh-rotation Lua path), or after destroyFamily's
+   * compatibility path completes.
+   */
+  async reportReuse(
+    familyId: string,
+    opts: { reason: string; accountId?: string; webhookUrl?: string | null },
+    counts: { refreshTokensRevoked: number; accessTokensRevoked: number },
+  ): Promise<void> {
+
     logger.warn(
       {
         event: "REFRESH_TOKEN_REUSE",
         familyId,
         accountId: opts.accountId,
         reason: opts.reason,
-        refresh_tokens_revoked: refreshTokens.length,
-        access_tokens_revoked: accessTokens.length,
+        refresh_tokens_revoked: counts.refreshTokensRevoked,
+        access_tokens_revoked: counts.accessTokensRevoked,
       },
       "Refresh token reuse detected; family revoked",
     );
@@ -97,8 +116,8 @@ export class RefreshFamily {
             family_id: familyId,
             account_id: opts.accountId ?? null,
             reason: opts.reason,
-            refresh_tokens_revoked: refreshTokens.length,
-            access_tokens_revoked: accessTokens.length,
+            refresh_tokens_revoked: counts.refreshTokensRevoked,
+            access_tokens_revoked: counts.accessTokensRevoked,
             ts: new Date().toISOString(),
           },
           { timeout: 5000 },
@@ -110,7 +129,5 @@ export class RefreshFamily {
         );
       }
     }
-
-    return { refreshTokensRevoked: refreshTokens.length, accessTokensRevoked: accessTokens.length };
   }
 }

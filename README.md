@@ -21,7 +21,7 @@ session, not as a replacement.
 | **Persistence** | Redis (encrypted credentials, session state, rate buckets, operation journal, OAuth artifacts) |
 | **Tool count** | 61 op-parameterized tools carrying 155 operations, across 23 permission groups (the CRUD collapse — every tool bundles 2-7 related operations behind an `op` field; see [`docs/tools/catalog.md`](docs/tools/catalog.md)) |
 | **Interactive UI** | MCP Apps (SEP-1865): every destructive tool renders its dry-run as a diff/confirm card; journal timeline, Assets AQL table, and automation-rule tree viewers. Renders in claude.ai/Desktop/mobile and ChatGPT dev-mode hosts; text-only clients unaffected. `GOJIRA_UI_ENABLED` — see [MCP Apps UI](docs/architecture/mcp-apps-ui.md) |
-| **Tests** | 145 unit tests across 24 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, site-pinning, and MCP Apps metadata/resources — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
+| **Tests** | 154 unit tests across 24 files covering auth, consent, journal, rate-limiting, retry, org-admin gate, revert coverage, site-pinning, and MCP Apps metadata/resources — plus a live-tenant e2e rig (`npm run e2e`, see [battle-testing](docs/development/battle-testing.md)) |
 
 ---
 
@@ -486,13 +486,13 @@ typically gets wrong:
 2. **End-to-end identity binding.** Tools cannot accept a caller/requester field from the client; identity is derived from the bearer.
 3. **Encrypted-at-rest credentials.** AES-256-GCM, unique IV per write, tampered blobs auto-purge.
 4. **Distributed refresh lock with compare-and-delete.** No thundering herd at token expiry; no accidental unlock by a stale holder.
-5. **Atomic one-time-use** for state, codes, and refresh artifacts (`GETDEL`).
+5. **Atomic one-time-use** for state and codes (`GETDEL`), plus a Redis-atomic refresh-family transition that cannot resurrect a revoked family.
 6. **OAuth error pass-through** to MCP client's `redirect_uri` — never a hung client on JSON 500.
 7. **Allowlist-based query construction** — no string concatenation of user input into upstream queries.
 8. **Fail-open rate limiting, fail-closed auth.** Availability for non-security failures; never bypass identity.
 9. **Health endpoint outside the auth boundary** — observability without privilege.
 10. **Token redaction in logs** as defense in depth.
-11. **Rotating MCP refresh tokens with reuse detection.** Family-tracked; presenting a previously-rotated RT while siblings are alive triggers full-family revocation + a `REFRESH_TOKEN_REUSE` audit event.
+11. **Rotating MCP refresh tokens with bounded idempotency and reuse detection.** Same-client/same-issuer duplicates within a fixed five-second window converge on the exact winning pair; later replay, or replay after the immediate child is no longer live, atomically burns the family and emits `REFRESH_TOKEN_REUSE`.
 12. **Operation journal with prior-state snapshots and revert.** Every destructive admin write captures `before` state; revertible operations can be undone by replaying the inverse mutation as a new journaled op.
 13. **Operator-controlled tool surface, least-privilege by default.** Permission groups + the `admin_org` gate are the runtime knobs. `GOJIRA_ENABLED_GROUPS` is an explicit allowlist (no implicit default) that filters the registered surface at session creation and again at dispatch. No client-side scope grammar to mismanage.
 14. **Site pinning at deploy time.** `ATLASSIAN_PINNED_CLOUD_ID` refuses any tool invocation whose target cloudId differs from the pinned value.

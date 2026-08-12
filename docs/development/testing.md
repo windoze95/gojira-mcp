@@ -1,7 +1,8 @@
 # Testing
 
-vitest with `v8` coverage. 145 tests across 24 files at the time of
-writing — covering encryption, OAuth provider rotation + reuse detection,
+vitest with `v8` coverage. 154 tests across 24 files at the time of
+writing — covering encryption, atomic OAuth rotation, bounded concurrent
+refresh idempotency + reuse detection,
 registered-client storage, operation journal, rate limiter with NearLimit
 feedback, Atlassian error mapping and retry/backoff, dry-run consent,
 registry filtering with operator-floor, the org-admin allowlist gate,
@@ -46,7 +47,7 @@ a test that owns it:
 | Property | Test file |
 |---|---|
 | AES-GCM encrypt/decrypt + tamper detection | `tests/auth/encryption.test.ts` |
-| RT rotation + reuse detection | `tests/auth/oauthProvider.test.ts` |
+| Atomic RT rotation, bounded duplicate replay, reuse burn, binding, and legacy migration | `tests/auth/oauthProvider.test.ts` |
 | DCR client storage — secret only for confidential clients | `tests/auth/clientsStore.test.ts` |
 | admin_org gate — operator-declared allowlist, fails closed | `tests/auth/orgAdminVerifier.test.ts` |
 | Operation journal write + paged read + failure handling | `tests/operations/journal.test.ts` |

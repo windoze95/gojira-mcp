@@ -98,11 +98,13 @@ Mounted by `mcpAuthRouter` from the SDK plus the upstream callback:
          - mintMcpTokens({ accountId, clientId }):
              - generate AT (32-byte hex, 1h TTL), RT (32-byte hex, 30d TTL)
              - scopes = []  (accountId travels in the bearer's `extra`)
-             - persist mcp_token:<at>  → { accountId, clientId, scopes,
-                                            expiresAt, familyId }
-             - persist mcp_refresh:<rt> → { accountId, clientId, scopes,
-                                             familyId, generation:1 }
-             - persist rt_family:<rt> → familyId  (TTL 31d, outlives RT)
+             - persist mcp_token:<at>  → { accountId, clientId,
+                                            expiresAt, familyId, issuer }
+             - persist mcp_refresh:<rt> → { accountId, clientId,
+                                             familyId, generation:1, issuer }
+             - persist rt_family:<rt> → { v:2, familyId, clientId,
+                                           issuer, generation:1 }
+               (TTL 31d, outlives RT for bound reuse detection)
              - SADD refresh_family:<familyId> rt
              - SADD refresh_family_tokens:<familyId> at
      ◄─ { access_token, refresh_token, token_type:"Bearer",

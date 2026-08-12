@@ -8,8 +8,10 @@ to encounter.
 **Trigger:** `REFRESH_TOKEN_REUSE` log line, or a webhook fired to
 `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK`.
 
-**Severity:** High by default; could be benign (client bug or race) or
-malicious (theft).
+**Severity:** High by default; could be benign (client bug or a delayed/lost
+refresh response) or malicious (theft). A normal concurrent retry inside the
+fixed five-second window emits `REFRESH_TOKEN_IDEMPOTENT_REPLAY`, not this
+incident.
 
 **Playbook:**
 
@@ -23,8 +25,10 @@ malicious (theft).
    audit log to enumerate any tool calls in the window before the
    reuse event, then to the journal to inspect the actual changes,
    then revert what's reversible.
-5. If benign (client bug or race): note the client's name + version
-   from the audit log's `client_id`; file with the client developers.
+5. If benign (client bug or delayed retry): note the client's name + version
+   from the audit log's `client_id`; file with the client developers. Repeated
+   informational idempotent-replay events without reuse are telemetry, not an
+   automatic incident.
 
 ## Incident: Atlassian credential leakage
 

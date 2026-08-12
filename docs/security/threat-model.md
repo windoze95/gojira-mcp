@@ -20,10 +20,10 @@
 |---|---|
 | External attacker over the public network | Can hit `/health`, `/.well-known/*`, `/register`, `/authorize`, `/oauth/atlassian-callback`. Cannot reach `/mcp` without a valid bearer. |
 | Compromised MCP client | Can replay its own bearer until it expires, can request new bearers via /authorize but only against scope they were granted. |
-| Stolen MCP refresh token | Detected on second use via D1 reuse detection; whole family revoked. |
+| Stolen MCP refresh token | A same-client/same-issuer duplicate can claim the exact winning pair for a fixed five-second idempotency window. A later replay of a bound version-2 token, or one whose immediate child is no longer live, atomically revokes the family. Already-stale unbound legacy indexes are rejected without a burn. |
 | Stolen Atlassian token (upstream) | Outside gojira's threat boundary — Atlassian's own revocation applies. |
 | Stolen `TOKEN_ENCRYPTION_KEY` alone | Useless without Redis snapshot. |
-| Stolen Redis snapshot alone | Encrypted blobs unreadable without the key. |
+| Stolen Redis snapshot alone | Encrypted upstream/API credential blobs remain unreadable without the key, but plaintext MCP bearer key names and any in-flight replay receipt values are usable until expiry or revocation. |
 | Stolen both | Total user-credential disclosure. Recovery: rotate the key (forces re-auth across all users) + revoke all Atlassian tokens. |
 | Compromised insider with the gojira-mcp host shell | Has access to env vars including the encryption key; can read Redis; effectively full compromise. Use host hardening + secret-manager pull-at-start to reduce exposure. |
 | Malicious tool input (prompt injection) | The model could attempt to call destructive tools. Mitigations: D5 commit-positive consent (model must opt in to mutation); identity binding (caller fields can't be spoofed); D4 site pinning (can't hit a different tenant); D2 journal (every change is recorded). |
@@ -59,9 +59,13 @@ prod-pinned instance, even if the model tries.
 ### Refresh-token reuse is detected
 
 See [refresh-token-rotation.md](../architecture/refresh-token-rotation.md)
-and [refresh-reuse.md](refresh-reuse.md). Replay of a rotated-away RT
-triggers full-family revocation + a structured warn log + optional
-webhook.
+and [refresh-reuse.md](refresh-reuse.md). A bound rotated-away RT has one fixed,
+non-sliding five-second receipt for legitimate same-client/same-issuer retries.
+Possession of the old bearer plus its client identity can claim that exact
+immediate-successor pair during the window. Afterward—or once the child is no
+longer live—replay atomically revokes the family and emits a structured warn
+log plus optional webhook. An already-stale pre-upgrade index has no trustworthy
+binding and is rejected without revocation until it expires.
 
 ### admin_org caller-verification ratchets up
 
