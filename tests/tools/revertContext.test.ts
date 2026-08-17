@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { resolveCredentials, makeClientFactories } from "../../src/tools/wrapHandler.js";
 import { defineTool } from "../../src/tools/defs/defineTool.js";
 import { AuthRequiredError } from "../../src/middleware/errorHandler.js";
+import { CredentialStoreUnreadableError } from "../../src/auth/tokenStore.js";
 import type { ToolDeps } from "../../src/tools/types.js";
 
 const makeTool = (authMethod: "oauth" | "api_token" | "oauth_or_api_token") =>
@@ -64,6 +65,49 @@ describe("oauth_or_api_token credential resolution (revertOperation context)", (
     await expect(resolveCredentials(makeTool("api_token"), depsWith({ oauth: true }), "acct")).rejects.toThrow(
       AuthRequiredError,
     );
+  });
+
+  it("does not invoke the OAuth refresher for an api_token-only tool", async () => {
+    const ensureFreshToken = vi.fn(async () => {
+      throw new Error("must not be called");
+    });
+    const deps = {
+      tokenRefresher: { ensureFreshToken },
+      apiTokenStore: {
+        get: async () => ({
+          account_id: "acct",
+          email: "svc@example.com",
+          token: "tok",
+          cloud_id: "cloud-1",
+          site_url: "x.atlassian.net",
+          display_name: "Service User",
+          added_at: Date.now(),
+        }),
+      },
+    } as unknown as ToolDeps;
+
+    const creds = await resolveCredentials(makeTool("api_token"), deps, "acct");
+
+    expect(ensureFreshToken).not.toHaveBeenCalled();
+    expect(creds.storedToken).toBeNull();
+    expect(creds.apiToken?.token).toBe("tok");
+  });
+
+  it("does not hide an unreadable OAuth entry behind dual-auth fallback", async () => {
+    const deps = {
+      tokenRefresher: {
+        ensureFreshToken: async () => {
+          throw new CredentialStoreUnreadableError("oauth");
+        },
+      },
+      apiTokenStore: {
+        get: async () => ({ token: "tok" }),
+      },
+    } as unknown as ToolDeps;
+
+    await expect(
+      resolveCredentials(makeTool("oauth_or_api_token"), deps, "acct"),
+    ).rejects.toBeInstanceOf(CredentialStoreUnreadableError);
   });
 });
 

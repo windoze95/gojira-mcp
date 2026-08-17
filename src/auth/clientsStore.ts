@@ -14,9 +14,22 @@ export class RedisClientsStore {
   }
 
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
-    const v = await this.redis.get(this.k(clientId));
+    const key = this.k(clientId);
+    const v = await this.redis.get(key);
     if (!v) return undefined;
-    return JSON.parse(v) as OAuthClientInformationFull;
+    const client = JSON.parse(v) as OAuthClientInformationFull;
+
+    // Public DCR clients have no secret whose fixed expiry must be preserved.
+    // Keep an actively used registration alive so long-running Codex clients do
+    // not have to register again every 90 days. Confidential registrations stay
+    // fixed-lifetime because extending their Redis TTL past
+    // client_secret_expires_at would leave an unusable record behind and would
+    // silently weaken the secret-expiry contract.
+    if (client.token_endpoint_auth_method === "none") {
+      await this.redis.expire(key, CLIENT_TTL_SECONDS);
+    }
+
+    return client;
   }
 
   async registerClient(

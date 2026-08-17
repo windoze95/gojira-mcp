@@ -47,7 +47,7 @@ a test that owns it:
 | Property | Test file |
 |---|---|
 | AES-GCM encrypt/decrypt + tamper detection | `tests/auth/encryption.test.ts` |
-| Atomic RT rotation, bounded duplicate replay, reuse burn, binding, and legacy migration | `tests/auth/oauthProvider.test.ts` |
+| Atomic RT rotation, bounded duplicate replay, strict reuse burn, contained reuse, binding, and legacy migration | `tests/auth/oauthProvider.test.ts` |
 | DCR client storage — secret only for confidential clients | `tests/auth/clientsStore.test.ts` |
 | admin_org gate — operator-declared allowlist, fails closed | `tests/auth/orgAdminVerifier.test.ts` |
 | Operation journal write + paged read + failure handling | `tests/operations/journal.test.ts` |

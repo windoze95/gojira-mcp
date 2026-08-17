@@ -80,7 +80,13 @@ Response:
 }
 ```
 
-Stored in Redis at `oauth_client:<client_id>` with a 90-day TTL.
+Stored in Redis at `oauth_client:<client_id>` with a 90-day TTL. The example is
+a confidential client: its Redis lifetime and `client_secret_expires_at` remain
+fixed at registration and are never extended. Codex commonly registers as a
+public client with `token_endpoint_auth_method: "none"`; gojira-mcp gives that
+client no secret and slides its 90-day registration TTL whenever the client is
+successfully read. Active public clients therefore remain registered without
+weakening confidential-secret expiry.
 
 ### Step 2: Authorize (with PKCE)
 
@@ -250,9 +256,12 @@ Provider's `exchangeRefreshToken`:
 4. Otherwise, for an active RT, verify upstream `token:<accountId>`, consume
    the parent, mint generation N+1 in the same family, update the family
    indexes, and write the fixed receipt atomically.
-5. For a stale, bound RT outside that recovery boundary, atomically delete all
-   current family credentials, emit `REFRESH_TOKEN_REUSE`, and return
-   `invalid_grant`.
+5. For a stale, bound RT outside that recovery boundary, apply
+   `GOJIRA_REFRESH_REUSE_POLICY`. `strict` atomically deletes all current family
+   credentials, emits `REFRESH_TOKEN_REUSE`, and returns `invalid_grant`.
+   `contain` preserves the live successor, emits
+   `REFRESH_TOKEN_REUSE_CONTAINED`, and returns retryable `server_error` without
+   disclosing the successor so Codex can reread its authoritative credential.
 
 An active legacy RT with a bare family index is accepted and upgraded during
 rotation. An already-stale bare index cannot prove its client/issuer binding,

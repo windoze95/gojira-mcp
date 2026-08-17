@@ -6,6 +6,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { loadConfig } from "./config.js";
 import { createRedisClient } from "./redis/client.js";
 import { createApp } from "./server.js";
+import { assertEncryptionKeyFingerprint } from "./auth/encryptionKeyFingerprint.js";
 import { logger } from "./utils/logger.js";
 
 async function main(): Promise<void> {
@@ -23,6 +24,17 @@ async function main(): Promise<void> {
   );
 
   const redis = createRedisClient(config.redisUrl);
+  const encryptionKeyFingerprintState = await assertEncryptionKeyFingerprint(
+    redis,
+    config.tokenEncryptionKey,
+  );
+  logger.info(
+    {
+      event: "TOKEN_ENCRYPTION_KEY_FINGERPRINT_VERIFIED",
+      state: encryptionKeyFingerprintState,
+    },
+    "TOKEN_ENCRYPTION_KEY matches the shared Redis namespace",
+  );
   const app = createApp(config, redis);
 
   const server = config.tls

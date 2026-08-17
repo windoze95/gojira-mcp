@@ -33,9 +33,23 @@ npm run generate-key
 # prints 32 random bytes, base64-encoded
 ```
 
-The loader rejects keys that don't decode to exactly 32 bytes. Tampering
-with the resulting ciphertext (or using the wrong key) fails closed:
-`decrypt()` throws, and `getToken()` purges the corrupt blob automatically.
+The loader rejects keys that don't decode to exactly 32 bytes. Tampered,
+malformed, or otherwise unreadable ciphertext fails closed: the encrypted blob
+is preserved for recovery/forensics, the caller receives a sanitized
+`CREDENTIAL_STORE_UNREADABLE` error, and operators get a credential-kind and
+account-scoped warning without ciphertext or key material.
+
+At startup, the first app using a Redis namespace atomically stores a
+non-secret HMAC-SHA-256 fingerprint at
+`token_encryption_key_fingerprint:v1`. When upgrading a populated namespace
+that predates this marker, the first claimant must successfully decrypt every
+existing `token:*` and `apitoken:*` blob before it can initialize the marker;
+mixed-key or corrupt legacy state fails deterministically for operator repair.
+Later processes must present the same `TOKEN_ENCRYPTION_KEY`; a mismatch fails
+startup before the HTTP listener is created, so one misconfigured member of a
+shared-Redis fleet cannot purge or overwrite credentials. A successful check logs
+`TOKEN_ENCRYPTION_KEY_FINGERPRINT_VERIFIED` with state `initialized` or
+`matched`, never the key.
 
 ## Don't:
 
@@ -61,19 +75,29 @@ with the resulting ciphertext (or using the wrong key) fails closed:
 
 ## Rotating `TOKEN_ENCRYPTION_KEY`
 
-There's no zero-downtime rotation today. The pragmatic path:
+There's no zero-downtime rotation today. Use a stopped-fleet cutover:
 
-1. Generate a new key (`npm run generate-key`).
-2. Decide on the rotation window. Users will need to re-authenticate
-   for OAuth tokens encrypted under the **old** key — pick a low-traffic
-   window or accept temporary disruption.
-3. Option A — **clean cutover** (recommended): set the new key, restart
-   the service, delete `token:*` and `apitoken:*` from Redis (clients
-   re-auth). This is the safest path; no risk of stale ciphertext.
-4. Option B — **dual-key transition** (not implemented): would require
-   extending `encryption.ts` with `decryptWithFallback(blob, primary,
-   secondaries[])` and writing a background re-encrypt job. Out of scope
-   for v0.
+1. Generate a new key (`npm run generate-key`) and schedule a maintenance
+   window. Users whose blobs are not re-encrypted will need to authenticate and
+   bind API tokens again.
+2. Stop **every app container that shares the Redis namespace**; keep Redis
+   available for the migration. Do not rotate one profile at a time.
+3. With the old key still available, either re-encrypt every `token:*` and
+   `apitoken:*` blob to the new key using an audited migration, or delete those
+   keys for a clean cutover. No dual-key migration is implemented in this repo,
+   so deletion and reauthentication are the supported built-in path.
+4. For a clean cutover, also revoke the `mcp_token:*`, `mcp_refresh:*`,
+   `mcp_refresh_replay:*`, `mcp_refresh_reuse_notice:*`, `refresh_family:*`,
+   `refresh_family_tokens:*`, `rt_family:*`, and `rt_family_account:*` state
+   that points at the removed upstream credentials.
+5. Only after the encrypted blobs have been re-encrypted or purged, delete the
+   permanent `token_encryption_key_fingerprint:v1` marker. Removing this marker
+   by itself is not a recovery procedure; it disables the mismatch guard.
+6. Set the new `TOKEN_ENCRYPTION_KEY` identically for every app container, then
+   restart the fleet. The first process claims the new fingerprint and the rest
+   must match it before listening.
+7. Verify the startup event and complete sequential login, `gojira.whoami`, and
+   harmless-read checks for every enabled profile.
 
 Roadmap candidate.
 

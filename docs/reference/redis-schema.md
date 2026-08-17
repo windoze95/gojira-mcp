@@ -5,7 +5,8 @@ TTLs and types are exact; sizes are typical.
 
 | Key pattern | Type | TTL | Encryption | Purpose |
 |---|---|---|---|---|
-| `oauth_client:<client_id>` | String (JSON) | 90 days | none | Dynamically registered MCP OAuth client (RFC 7591). |
+| `token_encryption_key_fingerprint:v1` | String (HMAC-SHA-256 hex) | None (permanent) | none; non-secret fingerprint | Atomic namespace claim for `TOKEN_ENCRYPTION_KEY`. A populated pre-marker namespace must first decrypt every existing credential, rejecting mixed-key/corrupt state. Every later process sharing Redis must match the claim or fail startup before listening. Delete only during a stopped-fleet rotation after `token:*` and `apitoken:*` have been re-encrypted or purged. |
+| `oauth_client:<client_id>` | String (JSON) | 90 days | none | Dynamically registered MCP OAuth client (RFC 7591). Public (`token_endpoint_auth_method=none`) registrations slide on successful read; confidential registrations retain their fixed Redis and `client_secret_expires_at` boundary. |
 | `pending_auth:<id>` | String (JSON) | 10 min | none | MCP client's PKCE/redirect captured during /authorize. |
 | `atlassian_state:<state>` | String (JSON) | 10 min | none | CSRF state for the upstream leg. **Consumed via `GETDEL`.** |
 | `auth_code:<code>` | String (JSON) | 5 min | none | gojira-issued auth code. **Consumed via `GETDEL`.** |
@@ -13,12 +14,13 @@ TTLs and types are exact; sizes are typical.
 | `mcp_refresh:<rt>` | String (JSON) | 30 days | none | MCP refresh token → `{ accountId, clientId, familyId, generation, issuer }`. Issuer contract as above; a sibling instance's exchange is refused *without* consuming the token. |
 | `rt_family:<rt>` | String (JSON) | 31 days | none | Versioned per-RT index → `{ v: 2, familyId, clientId, issuer, generation }`. Outlives the RT for bound reuse detection. Legacy bare-family strings remain readable; an active legacy RT upgrades its index on rotation, while an unbound stale index is rejected without family revocation. |
 | `mcp_refresh_replay:<oldRt>` | Hash | 5 seconds, fixed | none | Exact immediate-successor AT/RT receipt plus `client_id`, `issuer`, `family_id`, `account_id`, and `generation`. A valid duplicate gets this pair only while the child AT, RT, and family membership remain live. Reads never extend the TTL. |
+| `mcp_refresh_reuse_notice:<oldRt>` | String | 5 minutes, fixed | none | Containment alert deduplication for one stale RT. The stale request is still rejected on every presentation, but logs/webhooks emit at most once per window. |
 | `rt_family_account:<familyId>` | String (accountId) | 31 days | none | Family → account map. Outlives the RTs so reuse detection can still attribute the incident to a user after the presented RT's blob is gone. |
 | `refresh_family:<familyId>` | Set | 30 days | none | Currently-live RT ids in the family. |
 | `refresh_family_tokens:<familyId>` | Set | 30 days | none | Currently-live AT ids in the family. |
-| `token:<accountId>` | String (base64) | 90 days sliding | **AES-256-GCM** | Upstream Atlassian StoredToken: access_token, refresh_token, expires_at, accountId, name, email, accessible_cloud_ids[], primary_cloud_id. |
+| `token:<accountId>` | String (base64) | 90 days sliding | **AES-256-GCM** | Upstream Atlassian StoredToken: access_token, refresh_token, expires_at, accountId, name, email, accessible_cloud_ids[], primary_cloud_id. Slides on a successful upstream refresh or MCP RT rotation so active API-token-only clients do not lose their MCP family merely because this local key aged out. |
 | `apitoken:<accountId>` | String (base64) | None (manual revoke) | **AES-256-GCM** | Per-user Atlassian API token side-channel. |
-| `token_refresh_lock:<accountId>` | String (UUID) | 10 sec | none | Distributed lock for the upstream refresh path. CAD release via Lua. |
+| `token_refresh_lock:<accountId>` | String (UUID) | 30 sec | none | Distributed lock for the upstream refresh path. CAD release via Lua. |
 | `ratelimit:<accountId>` | Hash | 120 sec | none | Token-bucket: `tokens`, `last_refill_ms`, `reset_floor_until_ms`. |
 | `op_journal:<accountId>:<opId>` | String (JSON) | `GOJIRA_OPERATION_JOURNAL_TTL_DAYS` (default 30 days) | none | Journal entry: tool, target, before, after, request, outcome, revertible, `instance` (the writing instance's `GOJIRA_INSTANCE_NAME`; absent on pre-upgrade entries). `tool` is the collapsed tool name; for op-parameterized tools `request` carries a flat top-level `op` naming the operation (`commit` is stripped). Entries older than the CRUD collapse carry a pre-collapse tool name and no `op` — see [operation journal](../architecture/operation-journal.md) for how those still resolve. |
 | `op_journal_idx:<accountId>` | Sorted set (score = completedAt ms) | same | none | Index for `gojira.readJournal(op: "listRecentOperations")`. |
@@ -50,8 +52,8 @@ Only a handful of paths use atomic operations beyond simple `SET/GET`:
   `auth_code:*`.
 - One Lua compare-and-swap transition for MCP RT rotation. It validates a
   five-second replay receipt, consumes the parent and creates its successor,
-  or atomically burns a stale token family so a racing rotation cannot
-  resurrect it.
+  or classifies stale reuse. `strict` atomically burns the family;
+  `contain` preserves the live successor and returns its counts for alerting.
 - Lua eval for the rate-limiter (`BUCKET_SCRIPT`, `FEEDBACK_SCRIPT`).
 - Lua compare-and-delete for the upstream-refresh lock release.
 - Pipelines for initial token mint (`mcp_token:*`, `mcp_refresh:*`,
@@ -62,10 +64,13 @@ Only a handful of paths use atomic operations beyond simple `SET/GET`:
 
 Most keys have explicit TTLs. The exceptions:
 
+- `token_encryption_key_fingerprint:v1` — permanent namespace invariant. It
+  changes only as part of a stopped-fleet encryption-key rotation.
 - `apitoken:<accountId>` — no TTL because users manage their own API
   tokens at id.atlassian.com. Operator must DEL on revocation.
-- `oauth_client:<client_id>` — TTL set to 90 days at registration
-  time, refreshed only on rotation. Stale clients age out.
+- `oauth_client:<client_id>` — TTL set to 90 days at registration. Successful
+  reads slide public-client registrations; confidential clients never extend
+  beyond their fixed secret expiry. Stale clients still age out.
 
 Idle bucket cleanup is automatic via the `EXPIRE key window*2`
 inside the Lua script.

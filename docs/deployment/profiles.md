@@ -35,9 +35,10 @@ and env comments are updated with it.
 
 ## Topology
 
-One compose project (`docker-compose.profiles.yml`, standalone — don't mix
-with `docker-compose.yml`): N app services from one image + **one shared
-Redis**. Instances are reached over a private network as
+One stable Compose project (fresh-install examples use `gojira`, with
+`docker-compose.profiles.yml`; standalone — don't mix with
+`docker-compose.yml`): N app services from one image + **one shared Redis**.
+Instances are reached over a private network as
 `<scheme>://<GOJIRA_HOST>:<port>` — no reverse proxy; every container
 publishes its own host port. `MCP_PORT`/`MCP_SERVER_URL`/`REDIS_URL` are
 pinned in the compose `environment:` blocks (which override `env_file`) so
@@ -92,17 +93,41 @@ docker compose -p gojira -f docker-compose.profiles.yml \
   --env-file deploy/profiles/shared.env --profile org up -d
 ```
 
+For an upgrade, do not copy the example over an existing `shared.env`. Merge the
+new settings and explicitly add `GOJIRA_REFRESH_REUSE_POLICY=contain` (the
+profile-fleet recommendation) or `strict` before running preflight. Also replace
+the fresh-install `-p gojira` example above with the project name the deployment
+already uses; an existing `gojira-fleet` deployment, for example, must keep
+using `gojira-fleet`.
+
 `--env-file deploy/profiles/shared.env` matters on every invocation: it
 feeds compose *interpolation* (`GOJIRA_HOST`, `REDIS_PASSWORD`), which is a
 separate mechanism from the per-service `env_file:` container env.
+
+Keep all three identity anchors stable across upgrades:
+
+- **Compose project:** reuse the name the deployment started with. Fresh installs
+  here use `-p gojira`; another name on a later command selects a new empty Redis
+  volume and strands credentials, OAuth clients, and token families.
+- **Issuer:** do not change an instance's `MCP_SERVER_URL`; bearers and refresh
+  tokens are issuer-bound.
+- **Encryption key:** preserve the same `TOKEN_ENCRYPTION_KEY`. Startup claims a
+  non-secret HMAC-SHA-256 fingerprint in
+  `token_encryption_key_fingerprint:v1`; every app container sharing this Redis
+  must match it or fail before listening. Never delete the marker just to make a
+  mismatched container start.
 
 ### One Atlassian app, one callback, shared Redis
 
 Each instance is its own MCP OAuth authorization server (issuer =
 `MCP_SERVER_URL`), so your client authorizes each connected instance
-separately — expect one browser consent per instance (the upstream leg
-always sends `prompt=consent`), repeated when a 30-day refresh token
-expires.
+separately — expect one browser consent per instance (the upstream leg always
+sends `prompt=consent`). MCP access tokens live for one hour. Each successful
+refresh rotates the RT and starts a new 30-day TTL; a profile left completely
+idle for more than 30 days must authenticate again. Public DCR registrations
+slide their 90-day Redis TTL when used, so active clients do not age out merely
+because the original registration date passed. Confidential-client records do
+not slide beyond their fixed `client_secret_expires_at`.
 
 Upstream, the whole fleet shares **one** Atlassian OAuth app. An Atlassian
 3LO app registers a single callback URL, so `shared.env` pins
@@ -122,9 +147,9 @@ Consequences:
   CA) and switch the URLs to https.
 - One upstream credential (`token:<accountId>`) serves the fleet — which is
   why scopes are a fleet-wide superset, `TOKEN_ENCRYPTION_KEY` must be
-  identical everywhere (a mismatched key fails decryption and silently
-  purges the shared credential), and `gojira.bindApiToken` needs to run
-  only once for all JSM/forms/automation/Confluence tools.
+  identical everywhere (the Redis fingerprint invariant rejects a mismatch
+  before serving), and `gojira.bindApiToken` needs to run only once for all
+  JSM/forms/automation/Confluence tools.
 
 ### What is shared vs. isolated
 
@@ -139,6 +164,58 @@ Consequences:
 | Usage metrics | **Merged.** `/metrics/usage` on any instance reports the union. |
 | Audit stream | Per-instance target; every record carries `instance`. The org profile keeps a separate `GOJIRA_ORG_ADMIN_AUDIT_LOG_TARGET`. |
 | MCP sessions | Per-instance, in-memory. Restarting one instance 404s only its own sessions; clients re-initialize. |
+
+### Codex credential lifecycle and reuse policy
+
+Codex desktop, CLI, and IDE clients on one host share MCP configuration. Store
+their OAuth credentials in the OS keyring rather than a fallback file:
+
+```toml
+# ~/.codex/config.toml
+mcp_oauth_credentials_store = "keyring"
+```
+
+See the official [OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
+and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+Current Codex clients coordinate refreshes through a shared credential store,
+but two running processes—or one older/delayed process—can still temporarily
+hold different in-memory RT generations. A stale generation presented more than
+five seconds after rotation is indistinguishable from theft at the server.
+
+For that reason, `docker-compose.profiles.yml` explicitly defaults
+`GOJIRA_REFRESH_REUSE_POLICY` to `contain` even though the application and
+single-instance Compose secure default remain `strict`:
+
+- `strict` revokes the whole live family and emits `REFRESH_TOKEN_REUSE`;
+- `contain` preserves the current successor, emits
+  `REFRESH_TOKEN_REUSE_CONTAINED`, and returns retryable OAuth `server_error`
+  without disclosing the successor. This lets Codex reread/retry the latest
+  Keychain credential instead of purging it as terminal `invalid_grant`.
+
+Containment prevents one delayed process from logging every profile out, but it
+does not prove the replay was benign. Route contained events to the configured
+alert webhook/SIEM and investigate the named client; reauthenticate if
+compromise cannot be ruled out.
+
+### Clean post-deploy authentication
+
+After a deployment that changed auth behavior—or after any invalid/revoked
+credential—authenticate profiles **sequentially**, waiting for each command to
+finish before starting the next:
+
+```bash
+codex mcp login gojira-readonly
+codex mcp login gojira-service
+# Repeat for other enabled profiles, one at a time.
+```
+
+Then verify each connection with a fresh `gojira.whoami` call and one harmless
+enabled upstream read. `/health` proves service/Redis availability but not user
+authentication, and `codex mcp list` reporting OAuth `unknown` alone is not an
+authentication failure. For active profiles, schedule a low-frequency
+authenticated `gojira.whoami` (for example every 21 days) if you need to avoid
+the deliberate 30-day idle expiry; do not use that as the high-frequency
+liveness monitor.
 
 ### Telling instances apart
 

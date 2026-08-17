@@ -76,7 +76,8 @@ echo "══ fleet invariants ════════════════�
 # Fleet-shared values must be identical everywhere (they live in shared.env;
 # a profile file overriding one is exactly the drift this catches).
 for var in TOKEN_ENCRYPTION_KEY ATLASSIAN_OAUTH_CLIENT_ID ATLASSIAN_OAUTH_CLIENT_SECRET \
-           ATLASSIAN_OAUTH_SCOPES ATLASSIAN_CALLBACK_URI ATLASSIAN_PINNED_CLOUD_ID; do
+           ATLASSIAN_OAUTH_SCOPES ATLASSIAN_CALLBACK_URI ATLASSIAN_PINNED_CLOUD_ID \
+           GOJIRA_REFRESH_REUSE_POLICY; do
   ref=""; refname=""; bad=0
   for pfile in "${profiles[@]}"; do
     name=$(basename "$pfile" .env)
@@ -89,6 +90,14 @@ for var in TOKEN_ENCRYPTION_KEY ATLASSIAN_OAUTH_CLIENT_ID ATLASSIAN_OAUTH_CLIENT
   done
   [[ "$bad" == "0" ]] && grn "✓ $var identical across profiles"
 done
+
+reuse_policy=$(getvar "$SHARED" "GOJIRA_REFRESH_REUSE_POLICY")
+if [[ "$reuse_policy" != "strict" && "$reuse_policy" != "contain" ]]; then
+  red "✗ GOJIRA_REFRESH_REUSE_POLICY must be 'strict' or 'contain' in shared.env — older shared.env files must add it explicitly before preflight"
+  fail=1
+else
+  grn "✓ GOJIRA_REFRESH_REUSE_POLICY is '$reuse_policy'"
+fi
 
 # Instance names: present and pairwise distinct.
 seen=","

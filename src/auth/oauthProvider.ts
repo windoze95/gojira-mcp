@@ -21,6 +21,7 @@ import {
 
 import { RedisClientsStore } from "./clientsStore.js";
 import { RefreshFamily } from "./refreshFamily.js";
+import { STORED_TOKEN_TTL_SECONDS } from "./tokenStore.js";
 import { logger } from "../utils/logger.js";
 import type { AppConfig } from "../config.js";
 
@@ -37,6 +38,8 @@ const RT_FAMILY_INDEX_TTL = 31 * 24 * 60 * 60;
  * of the old bearer is sufficient to claim the receipt.
  */
 const MCP_REFRESH_REPLAY_TTL = 5;
+/** Suppress duplicate contained-reuse alerts from a retrying stale process. */
+const MCP_REFRESH_REUSE_NOTICE_TTL = 5 * 60;
 const REFRESH_FAMILY_TTL = MCP_REFRESH_TTL;
 
 /**
@@ -58,6 +61,7 @@ local new_index_key = KEYS[7]
 local family_account_key = KEYS[8]
 local family_refresh_key = KEYS[9]
 local family_access_key = KEYS[10]
+local reuse_notice_key = KEYS[11]
 
 local expected_active = ARGV[1]
 local expected_index = ARGV[2]
@@ -78,6 +82,9 @@ local refresh_ttl = tonumber(ARGV[16])
 local index_ttl = tonumber(ARGV[17])
 local family_ttl = tonumber(ARGV[18])
 local replay_ttl = tonumber(ARGV[19])
+local reuse_policy = ARGV[20]
+local upstream_ttl = tonumber(ARGV[21])
+local reuse_notice_ttl = tonumber(ARGV[22])
 
 -- A receipt is valid only for the immediate child generation. Reading it does
 -- not extend its TTL, so repeated retries cannot turn the grace into a sliding
@@ -131,6 +138,12 @@ if active then
     redis.call('SREM', family_refresh_key, old_refresh_token)
     return {'upstream_missing'}
   end
+
+  -- An actively rotating MCP client is still an active authenticated user,
+  -- even when every tool it calls uses the API-token side channel. Keep the
+  -- shared upstream credential available so API-token-only activity cannot
+  -- age the MCP family into an artificial logout at the local 90-day TTL.
+  redis.call('EXPIRE', upstream_key, upstream_ttl)
 
   -- Preserve the old index's remaining lifetime while upgrading its value to
   -- the structured client/issuer-bound format used by post-grace detection.
@@ -187,6 +200,21 @@ if #refresh_tokens == 0 then
   return {'invalid'}
 end
 local access_tokens = redis.call('SMEMBERS', family_access_key)
+
+-- Containment is an availability policy for clients that persist a stale
+-- parent after losing a refresh response. Never disclose or mint credentials
+-- here: preserve the current head and return only sanitized counts for
+-- telemetry. Client and issuer binding was verified before this transition.
+if reuse_policy == 'contain' then
+  local notice_created = redis.call(
+    'SET', reuse_notice_key, '1', 'EX', reuse_notice_ttl, 'NX'
+  )
+  return {
+    'contained', family_id, account_id,
+    tostring(#refresh_tokens), tostring(#access_tokens),
+    notice_created and '1' or '0'
+  }
+end
 
 -- Revoke the entire current family in this same atomic transition. A racing
 -- rotation therefore either happens before this burn and is deleted, or after
@@ -294,6 +322,7 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
     mcpAccess: (token: string) => `mcp_token:${token}`,
     mcpRefresh: (token: string) => `mcp_refresh:${token}`,
     mcpRefreshReplay: (token: string) => `mcp_refresh_replay:${token}`,
+    mcpRefreshReuseNotice: (token: string) => `mcp_refresh_reuse_notice:${token}`,
     rtFamilyIndex: (token: string) => `rt_family:${token}`,
     familyAccount: (familyId: string) => `rt_family_account:${familyId}`,
   };
@@ -467,7 +496,7 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
 
       const result = (await this.redis.eval(
         ROTATE_REFRESH_TOKEN_SCRIPT,
-        10,
+        11,
         rtKey,
         GojiraOAuthProvider.keys.mcpRefreshReplay(refreshToken),
         indexKey,
@@ -478,6 +507,7 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
         GojiraOAuthProvider.keys.familyAccount(familyId),
         this.family.familyKey(familyId),
         this.family.accessTokensKey(familyId),
+        GojiraOAuthProvider.keys.mcpRefreshReuseNotice(refreshToken),
         activeRaw ?? "",
         indexRaw ?? "",
         client.client_id,
@@ -497,6 +527,9 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
         RT_FAMILY_INDEX_TTL.toString(),
         REFRESH_FAMILY_TTL.toString(),
         MCP_REFRESH_REPLAY_TTL.toString(),
+        this.config.refreshReusePolicy ?? "strict",
+        STORED_TOKEN_TTL_SECONDS.toString(),
+        MCP_REFRESH_REUSE_NOTICE_TTL.toString(),
       )) as RefreshScriptResult;
 
       const [status, ...values] = result;
@@ -515,21 +548,38 @@ export class GojiraOAuthProvider implements OAuthServerProvider {
       if (status === "invalid") {
         throw new InvalidGrantError("refresh token is invalid or revoked");
       }
-      if (status === "reuse") {
-        const [reusedFamilyId, reusedAccountId, rtCount, atCount] = values;
-        await this.family.reportReuse(
-          reusedFamilyId!,
-          {
-            reason:
-              "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
-            accountId: reusedAccountId || undefined,
-            webhookUrl: this.config.refreshReuseAlertWebhook,
-          },
-          {
-            refreshTokensRevoked: Number(rtCount),
-            accessTokensRevoked: Number(atCount),
-          },
-        );
+      if (status === "reuse" || status === "contained") {
+        const [reusedFamilyId, reusedAccountId, rtCount, atCount, reportFlag] = values;
+        const contained = status === "contained";
+        if (!contained || reportFlag === "1") {
+          await this.family.reportReuse(
+            reusedFamilyId!,
+            {
+              reason:
+                "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
+              accountId: reusedAccountId || undefined,
+              clientId: client.client_id,
+              webhookUrl: this.config.refreshReuseAlertWebhook,
+              policy: contained ? "contain" : "strict",
+              action: contained ? "family_preserved" : "family_revoked",
+            },
+            {
+              refreshTokensRevoked: contained ? 0 : Number(rtCount),
+              accessTokensRevoked: contained ? 0 : Number(atCount),
+              ...(contained
+                ? {
+                    liveRefreshTokens: Number(rtCount),
+                    liveAccessTokens: Number(atCount),
+                  }
+                : {}),
+            },
+          );
+        }
+        if (contained) {
+          throw new ServerError(
+            "Refresh retry could not be completed safely; retry with the latest stored credentials",
+          );
+        }
         throw new InvalidGrantError("refresh token is invalid or revoked");
       }
       if (status === "rotated" || status === "replay") {

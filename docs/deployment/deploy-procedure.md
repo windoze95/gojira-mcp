@@ -151,6 +151,25 @@ gojira.whoami
 You should see your accountId, the deployment's pinned cloudId, and the
 list of enabled groups.
 
+For Codex, persist MCP OAuth credentials in the OS keyring and perform explicit
+post-deploy login/verification. If several profile connections are enabled, run
+each login sequentially and wait for success before starting the next:
+
+```toml
+# ~/.codex/config.toml
+mcp_oauth_credentials_store = "keyring"
+```
+
+```bash
+codex mcp login <connection-name>
+```
+
+After each login, make a fresh `gojira.whoami` call plus one harmless upstream
+read exposed by that connection. A green `/health` proves service/Redis
+availability, not user auth, and OAuth `unknown` in `codex mcp list` is not by
+itself failure evidence. See the official
+[OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
 For the JSM-admin (`jsm.*`, `forms.*`), Confluence-admin, and automation
 tools — the ones that authenticate with the per-user API token rather
 than OAuth — each user also calls:
@@ -175,6 +194,9 @@ a **Jira administrator** or every automation call 403s.
   forces re-auth).
 - `GOJIRA_ORG_ADMIN_TOKEN`: every 6 months, on personnel changes.
 - `REDIS_PASSWORD`: every 12 months.
+- MCP RT: rolling 30 days on successful refresh. A completely idle connection
+  must log in again; use a low-frequency authenticated continuity check before
+  day 30 if uninterrupted access is required.
 
 ## Step 9 — Expand the surface
 

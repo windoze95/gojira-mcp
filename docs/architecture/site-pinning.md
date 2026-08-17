@@ -38,7 +38,8 @@ There are three layers, in order of precedence:
 
 3. **At every tool call** — `resolveCloudId` in `wrapHandler.ts`:
    - if pinned: return pinned, after verifying it's still in
-     `accessible_cloud_ids` (purges stale grants)
+     `accessible_cloud_ids` (rejects a stale or revoked grant without deleting
+     the stored credential)
    - if not pinned: return `primary_cloud_id`
    - reject if API-token side-channel is bound to a different cloudId
 

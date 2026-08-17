@@ -4,7 +4,11 @@ import type { AppConfig } from "../config.js";
 import { TokenStore, type StoredToken } from "./tokenStore.js";
 import { refreshAtlassianTokens } from "../atlassian/identity.js";
 import { logger } from "../utils/logger.js";
-import { AuthExpiredError, AuthRequiredError } from "../middleware/errorHandler.js";
+import {
+  AuthExpiredError,
+  AuthRequiredError,
+  UpstreamUnavailableError,
+} from "../middleware/errorHandler.js";
 
 /** Refresh if the access token expires within this many ms. */
 const REFRESH_GUARD_MS = 60_000;
@@ -44,8 +48,9 @@ export class TokenRefresher {
    * double-check after acquiring lock.
    */
   async ensureFreshToken(accountId: string): Promise<StoredToken> {
-    const stored = await this.tokens.get(accountId);
-    if (!stored) throw new AuthRequiredError("No upstream credential on file");
+    const initial = await this.tokens.getSnapshot(accountId);
+    if (!initial) throw new AuthRequiredError("No upstream credential on file");
+    const stored = initial.token;
 
     if (stored.expires_at - Date.now() > REFRESH_GUARD_MS) {
       return stored;
@@ -74,13 +79,17 @@ export class TokenRefresher {
         const lockStillHeld = await this.redis.exists(lockKey);
         if (!lockStillHeld) return this.ensureFreshToken(accountId);
       }
-      throw new AuthExpiredError("Token refresh contention timed out");
+      throw new UpstreamUnavailableError(
+        "Atlassian credential refresh is temporarily busy; retry later.",
+        { reason: "REFRESH_CONTENTION_TIMEOUT" },
+      );
     }
 
     try {
       // Double-check inside the critical section.
-      const recheck = await this.tokens.get(accountId);
-      if (!recheck) throw new AuthRequiredError("Upstream credential disappeared");
+      const recheckSnapshot = await this.tokens.getSnapshot(accountId);
+      if (!recheckSnapshot) throw new AuthRequiredError("Upstream credential disappeared");
+      const recheck = recheckSnapshot.token;
       if (recheck.expires_at - Date.now() > REFRESH_GUARD_MS) return recheck;
       const refreshToken = recheck.refresh_token;
       if (!refreshToken) throw new AuthExpiredError("No refresh token");
@@ -93,13 +102,47 @@ export class TokenRefresher {
           refreshToken,
         });
       } catch (err) {
-        const status = (err as { response?: { status?: number } }).response?.status;
-        if (status === 400 || status === 401) {
-          await this.tokens.delete(accountId);
-          logger.warn({ accountId, status }, "Upstream rejected refresh; purging stored token");
+        const oauthFailure = describeOAuthFailure(err);
+        if (oauthFailure.isInvalidGrant) {
+          const deleted = await this.tokens.deleteIfUnchanged(
+            accountId,
+            recheckSnapshot.version,
+          );
+          if (!deleted) {
+            // A callback/login replaced the credential while the old refresh
+            // request was in flight. The newer login wins; never delete it or
+            // report the stale request's invalid_grant to the caller.
+            const replacement = await this.tokens.get(accountId);
+            if (replacement) {
+              logger.info(
+                { accountId },
+                "Adopting credential written during an in-flight invalid_grant response",
+              );
+              return replacement;
+            }
+          }
+          logger.warn(
+            { accountId, status: oauthFailure.status },
+            "Atlassian rejected the current refresh grant; removed matching credential",
+          );
           throw new AuthExpiredError("Upstream rejected refresh; re-authentication required");
         }
-        throw err;
+        logger.warn(
+          {
+            accountId,
+            status: oauthFailure.status,
+            oauthError: oauthFailure.safeCode,
+          },
+          "Atlassian refresh failed; preserving stored credential",
+        );
+        throw new UpstreamUnavailableError(
+          "Atlassian credential refresh failed; the existing credential was preserved.",
+          {
+            reason: "UPSTREAM_REFRESH_FAILED",
+            status: oauthFailure.status,
+            oauth_error: oauthFailure.safeCode,
+          },
+        );
       }
 
       const next: StoredToken = {
@@ -112,8 +155,24 @@ export class TokenRefresher {
         accessible_cloud_ids: recheck.accessible_cloud_ids,
         primary_cloud_id: recheck.primary_cloud_id,
       };
-      await this.tokens.put(next);
-      return next;
+      const persisted = await this.tokens.putIfUnchanged(
+        next,
+        recheckSnapshot.version,
+      );
+      if (persisted) return next;
+
+      // The refresh succeeded, but a callback/login replaced the old snapshot
+      // before we could persist it. Adopt that newer credential instead of
+      // overwriting it with a response derived from the old refresh grant.
+      const replacement = await this.tokens.get(accountId);
+      if (replacement) {
+        logger.info(
+          { accountId },
+          "Adopting credential written during an in-flight refresh",
+        );
+        return replacement;
+      }
+      throw new AuthRequiredError("Upstream credential disappeared during refresh");
     } finally {
       // CAD release.
       await this.redis.eval(CAD_SCRIPT, 1, lockKey, lockToken).catch((err) => {
@@ -128,4 +187,44 @@ export class TokenRefresher {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+interface OAuthFailureDescription {
+  status: number | null;
+  safeCode: string;
+  isInvalidGrant: boolean;
+}
+
+const SAFE_OAUTH_ERROR_CODES = new Set([
+  "invalid_client",
+  "invalid_request",
+  "invalid_scope",
+  "temporarily_unavailable",
+  "unauthorized_client",
+  "unsupported_grant_type",
+]);
+
+/** Extract only bounded OAuth metadata; never surface upstream descriptions. */
+function describeOAuthFailure(err: unknown): OAuthFailureDescription {
+  const response = (err as { response?: { status?: unknown; data?: unknown } } | null)?.response;
+  const status = typeof response?.status === "number" ? response.status : null;
+  const data = response?.data;
+  const code =
+    data && typeof data === "object" && !Array.isArray(data)
+      ? (data as { error?: unknown }).error
+      : null;
+  const oauthCode = typeof code === "string" ? code : null;
+  const isClientError = status !== null && status >= 400 && status < 500;
+  return {
+    status,
+    safeCode:
+      oauthCode && SAFE_OAUTH_ERROR_CODES.has(oauthCode)
+        ? oauthCode
+        : oauthCode === "invalid_grant"
+          ? "invalid_grant"
+          : "unclassified",
+    // Purging is deliberately narrower than status-based handling: only an
+    // actual OAuth invalid_grant response proves this stored grant is dead.
+    isInvalidGrant: isClientError && oauthCode === "invalid_grant",
+  };
 }

@@ -123,7 +123,7 @@ Per-process there are two contention points:
 
 1. **Per-user token refresh.** Multiple concurrent tool calls for the same
    user could each see a stale access token. The `TokenRefresher` uses a
-   Redis `SET token_refresh_lock:<accountId> <uuid> EX 10 NX` and releases
+   Redis `SET token_refresh_lock:<accountId> <uuid> EX 30 NX` and releases
    via Lua compare-and-delete. See
    [refresh-token-rotation.md](refresh-token-rotation.md) — that doc is about
    *MCP-issued* RT rotation; the upstream Atlassian refresh story is here in

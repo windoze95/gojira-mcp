@@ -15,6 +15,7 @@ import {
 } from "../atlassian/client.js";
 import { AtlassianApiError, mapAtlassianError } from "../atlassian/errors.js";
 import { ApiTokenStore } from "../auth/apiTokenStore.js";
+import { CredentialStoreUnreadableError } from "../auth/tokenStore.js";
 import {
   AuthRequiredError,
   InsufficientPermissionsError,
@@ -364,16 +365,17 @@ async function resolveCredentials(
   let storedToken: ResolvedCredentials["storedToken"] = null;
   let apiToken: ResolvedCredentials["apiToken"] = null;
 
-  if (def.authMethod === "oauth" || def.authMethod === "api_token" || def.authMethod === "oauth_or_api_token") {
+  if (def.authMethod === "oauth" || def.authMethod === "oauth_or_api_token") {
     try {
       storedToken = await deps.tokenRefresher.ensureFreshToken(accountId);
     } catch (err) {
-      if (def.authMethod === "oauth") throw err;
-      // For api_token tools we still want to know who the caller is, but missing
-      // OAuth shouldn't block them. Silently continue with no storedToken.
+      if (def.authMethod === "oauth" || err instanceof CredentialStoreUnreadableError) throw err;
+      // oauth_or_api_token tools can use the bound API token when delegated
+      // OAuth is simply unavailable. An unreadable encrypted entry is not
+      // treated as absence: it remains a distinct, fail-closed operator error.
       logger.debug(
         { err: err instanceof Error ? err.message : String(err), accountId },
-        "OAuth missing for api_token tool — continuing without OAuth context",
+        "OAuth unavailable for dual-auth tool — continuing with API token context",
       );
     }
   }

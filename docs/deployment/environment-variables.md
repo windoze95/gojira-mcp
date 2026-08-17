@@ -11,7 +11,7 @@ here drifts from there, the schema wins.
 | `ATLASSIAN_OAUTH_CLIENT_ID` | From the Atlassian developer console. The OAuth app's client id used for the upstream 3LO leg. |
 | `ATLASSIAN_OAUTH_CLIENT_SECRET` | Companion secret. **Sensitive** — never log, never check in. |
 | `ATLASSIAN_OAUTH_SCOPES` | Space-separated list of Atlassian OAuth scopes this deployment requests upstream. **Must include `offline_access`** (refresh tokens require it). Must be a subset of what the developer-console app declares. Only the OAuth-authed groups consume these — the JSM-admin (`jsm.*`, `forms.*`), Confluence-admin, and automation tools use the per-user API token and need no scope; Assets needs the CMDB granular scopes **plus** `read:servicedesk-request` for workspace discovery. See [turnkey-setup.md §3](turnkey-setup.md). |
-| `TOKEN_ENCRYPTION_KEY` | Base64-encoded 32-byte key. Generate via `npm run generate-key`. Loader rejects any other length. |
+| `TOKEN_ENCRYPTION_KEY` | Base64-encoded 32-byte key. Generate via `npm run generate-key`. Loader rejects any other length. Startup also requires it to match the permanent non-secret `token_encryption_key_fingerprint:v1` claim in the selected Redis namespace; mismatch fails before listening. |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allowlist. `*` allows any origin. **Required** — no default. |
 | `GOJIRA_ENABLED_GROUPS` | Comma-separated permission groups this deployment will register. **Required** — no implicit default. The value names exactly what surface is exposed (least-privilege by default). See [permission-groups.md](../tools/permission-groups.md) for the full list and per-deployment recipes. |
 
@@ -55,7 +55,8 @@ known group names at startup; unknown values fail loudly.
 
 | Var | Default | Notes |
 |---|---|---|
-| `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` | none | HTTP endpoint POSTed when an RT reuse event is detected. Body is JSON with `family_id`, `account_id`, counts, timestamp. |
+| `GOJIRA_REFRESH_REUSE_POLICY` | `strict` | `strict` rejects stale RT reuse, revokes the live family, and returns `invalid_grant` (`REFRESH_TOKEN_REUSE`). `contain` preserves the successor and returns retryable `server_error` without disclosing it (`REFRESH_TOKEN_REUSE_CONTAINED`), preventing shared-client fleet logout at the cost of mandatory alert-and-investigate. The split-profile Compose file explicitly defaults to `contain`; the code and single-instance Compose path retain `strict`. |
+| `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` | none | HTTP endpoint POSTed when a strict or contained RT reuse event is detected. Body includes family/account/client IDs, policy/action, live or revoked counts, and timestamp; never token material. |
 
 ## Audit
 

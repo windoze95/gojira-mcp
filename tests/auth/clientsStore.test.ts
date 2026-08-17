@@ -24,7 +24,8 @@ describe("RedisClientsStore — DCR auth-method handling", () => {
   });
 
   it("round-trips a stored client", async () => {
-    const store = new RedisClientsStore(makeRedis());
+    const redis = makeRedis();
+    const store = new RedisClientsStore(redis);
     const created = await store.registerClient({
       redirect_uris: ["http://localhost/cb"],
       token_endpoint_auth_method: "none",
@@ -32,5 +33,39 @@ describe("RedisClientsStore — DCR auth-method handling", () => {
     const got = await store.getClient(created.client_id);
     expect(got?.client_id).toBe(created.client_id);
     expect(got?.client_secret).toBeUndefined();
+  });
+
+  it("slides the 90-day TTL when an active public client is read", async () => {
+    const redis = makeRedis();
+    const store = new RedisClientsStore(redis);
+    const created = await store.registerClient({
+      redirect_uris: ["http://localhost/cb"],
+      token_endpoint_auth_method: "none",
+    } as never);
+    const key = `oauth_client:${created.client_id}`;
+
+    await redis.expire(key, 10);
+    await store.getClient(created.client_id);
+
+    expect(await redis.ttl(key)).toBeGreaterThan(89 * 24 * 60 * 60);
+  });
+
+  it("does not extend a confidential client's TTL or secret expiry", async () => {
+    const redis = makeRedis();
+    const store = new RedisClientsStore(redis);
+    const created = await store.registerClient({
+      redirect_uris: ["http://localhost/cb"],
+      token_endpoint_auth_method: "client_secret_post",
+    } as never);
+    const key = `oauth_client:${created.client_id}`;
+    const secretExpiresAt = created.client_secret_expires_at;
+
+    await redis.expire(key, 10);
+    const got = await store.getClient(created.client_id);
+    const ttl = await redis.ttl(key);
+
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(10);
+    expect(got?.client_secret_expires_at).toBe(secretExpiresAt);
   });
 });

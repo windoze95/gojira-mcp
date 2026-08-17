@@ -38,10 +38,11 @@ needed for this tool.
 
 ### `AUTH_EXPIRED`
 
-Atlassian rejected the credential with 401, or our refresh attempt
-failed (400/401 from the refresh endpoint).
-
-`details` carries the upstream error messages.
+The stored upstream credential has no refresh token, Atlassian explicitly
+returned OAuth `invalid_grant` for the unchanged stored RT, or an API call still
+returned 401 after the refresh path had its chance. Only `invalid_grant` proves
+that a stored refresh grant is dead; the matching snapshot is deleted with a
+compare-and-delete guard so a concurrent login cannot be erased.
 
 **Caller action:** re-authenticate from scratch (`/authorize`). The
 existing refresh token is dead.
@@ -103,8 +104,12 @@ present.
 
 ### `UPSTREAM_UNAVAILABLE`
 
-Atlassian returned 5xx after the retry layer exhausted, or the network
-was unreachable.
+Atlassian returned 5xx after the retry layer exhausted, the network was
+unreachable, refresh-lock acquisition timed out, or an upstream refresh failed
+without a proven `invalid_grant`. This includes `invalid_client` and other
+OAuth/client/configuration failures. The existing encrypted credential is
+preserved so the caller can retry after the transient or operator issue is
+resolved.
 
 **Caller action:** retry later. Persistent failures should escalate to
 operator triage — Atlassian status page first, then logs.
@@ -113,6 +118,11 @@ operator triage — Atlassian status page first, then logs.
 
 The catch-all. Anything not covered above — programming errors,
 unexpected response shapes, third-party library exceptions.
+
+An unreadable encrypted OAuth or API-token blob also fails closed here with
+`details.reason: "CREDENTIAL_STORE_UNREADABLE"` and a safe credential kind. The
+ciphertext is preserved for operator recovery/forensics; neither it nor key
+material is returned or logged.
 
 The envelope includes the `reference_id`; the full exception (including
 stack) is logged at error level with the same id.
@@ -125,7 +135,9 @@ the action is idempotent.
 | Upstream | gojira code |
 |---|---|
 | 400 | `VALIDATION_ERROR` |
-| 401 (after refresh attempt) | `AUTH_EXPIRED` |
+| API 401 after refresh had its chance | `AUTH_EXPIRED` |
+| Refresh OAuth `invalid_grant` or no stored RT | `AUTH_EXPIRED` |
+| Refresh `invalid_client`, other OAuth error, 5xx/network failure, or lock contention | `UPSTREAM_UNAVAILABLE` (credential preserved) |
 | 403 (general) | `INSUFFICIENT_PERMISSIONS` |
 | 404, 410 | `NOT_FOUND` |
 | 409 | `VALIDATION_ERROR` with `conflict: true` |
