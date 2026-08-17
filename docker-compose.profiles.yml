@@ -8,6 +8,10 @@
 #   cp deploy/profiles/shared.env.example deploy/profiles/shared.env   # + each profile
 #   docker compose -p gojira -f docker-compose.profiles.yml --env-file deploy/profiles/shared.env up -d --build
 #   docker compose -p gojira -f docker-compose.profiles.yml --env-file deploy/profiles/shared.env --profile org up -d   # include org-admin
+# `gojira` is the fresh-install example. Upgrades must reuse their deployed
+# project name (for example, keep an existing `gojira-fleet` deployment on
+# `gojira-fleet`) because it owns the Redis volume containing credentials,
+# OAuth clients, and live refresh-token families.
 #
 # Ports publish on all interfaces: the fleet is meant to be reached over a
 # PRIVATE network as <scheme>://<GOJIRA_HOST>:<port>. Firewall accordingly.
@@ -20,8 +24,8 @@
 # Otherwise every container crash-loops with "Issuer URL must be HTTPS".
 #
 # The environment: blocks below deliberately OVERRIDE the env files (compose
-# precedence): MCP_PORT / MCP_SERVER_URL / REDIS_URL are structural to this
-# topology and must not drift per profile file.
+# precedence): MCP_PORT / MCP_SERVER_URL / REDIS_URL and the fleet refresh-reuse
+# default are structural to this topology and must not drift per profile file.
 
 # `build:` lives on gojira-readonly ONLY — five services building the same
 # tag in parallel race each other exporting the image. Everyone else reuses
@@ -40,6 +44,11 @@ x-gojira: &gojira
 x-gojira-env: &gojira-env
   MCP_PORT: 8081
   REDIS_URL: "redis://:${REDIS_PASSWORD:?set in deploy/profiles/shared.env, passed via --env-file}@redis:6379"
+  # A profile fleet can have several Codex processes refreshing the same token
+  # family. Containment rejects a delayed stale token and alerts without logging
+  # every profile out. The single-instance/code default remains strict; override
+  # this to `strict` only when automatic family revocation is the desired tradeoff.
+  GOJIRA_REFRESH_REUSE_POLICY: "${GOJIRA_REFRESH_REUSE_POLICY:-contain}"
 
 services:
   # Always-connected read surface; also the fleet's OAuth callback anchor —

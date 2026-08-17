@@ -25,7 +25,7 @@ Mounted by `mcpAuthRouter` from the SDK plus the upstream callback:
 | Path | Purpose | Auth |
 |---|---|---|
 | `GET /.well-known/oauth-authorization-server` | OAuth discovery | unauthenticated |
-| `POST /register` | RFC 7591 dynamic client registration | unauthenticated; emits client_id + secret with 90-day TTL |
+| `POST /register` | RFC 7591 dynamic client registration | unauthenticated; confidential clients receive a secret with fixed 90-day expiry, while public clients receive no secret and slide their 90-day registration TTL on use |
 | `GET /authorize` | begin the flow with the MCP client's PKCE | unauthenticated; persists `pending_auth:<id>` + `atlassian_state:<state>` |
 | `POST /token` | code → AT/RT exchange; refresh exchange | client_secret_basic or post |
 | `POST /revoke` | revoke an AT or RT | client-scoped |
@@ -38,7 +38,9 @@ Mounted by `mcpAuthRouter` from the SDK plus the upstream callback:
 ```
 1. MCP client → POST /register
    ─► stores OAuthClientInformationFull in oauth_client:<id> (TTL 90d)
-   ◄─ returns { client_id, client_secret }
+   ◄─ confidential: { client_id, client_secret, client_secret_expires_at }
+      public (`token_endpoint_auth_method=none`): { client_id }, no secret
+   ─► successful reads slide only the public client's 90d TTL
 
 2. MCP client → GET /authorize?
        client_id, redirect_uri, code_challenge,
@@ -139,26 +141,35 @@ patterns:
 
 ## Upstream refresh
 
-`TokenRefresher.ensureFreshToken(accountId)` runs before every tool call
-through `wrapHandler`. Logic:
+`TokenRefresher.ensureFreshToken(accountId)` runs before OAuth and dual-auth
+tool calls through `wrapHandler`. API-token-only tools deliberately skip it;
+successful MCP RT rotation still slides the shared upstream credential's local
+90-day TTL. Logic:
 
 1. Load the StoredToken. If `expires_at - now > 60_000` (60-second guard),
    return it.
 2. Acquire `token_refresh_lock:<accountId>` via
-   `SET ... <uuid> EX 10 NX`. On `nil` return:
-   - sleep 1s, re-read the token; if still stale, throw `AuthExpiredError`.
+   `SET ... <uuid> EX 30 NX`. On `nil` return:
+   - poll for the winning holder's fresh token;
+   - retry lock acquisition if the holder exits without publishing; or
+   - after the bounded wait, return retryable `UPSTREAM_UNAVAILABLE` with
+     `REFRESH_CONTENTION_TIMEOUT`. Contention never proves auth expiry.
 3. Inside the lock: double-check (another holder may have refreshed during
    contention).
 4. `POST https://auth.atlassian.com/oauth/token` with `grant_type=refresh_token`.
-5. Persist the new StoredToken (preserves refresh_token if Atlassian didn't
-   rotate one).
+5. Compare-and-swap the new StoredToken (preserves `refresh_token` if Atlassian
+   didn't rotate one). If a concurrent login replaced the snapshot, adopt the
+   newer login rather than overwriting it.
 6. Release the lock via Lua **compare-and-delete** — we only DEL when the
    value still matches our UUID. Prevents a stale holder from accidentally
    releasing a newer lock.
 
-400/401 from the refresh endpoint deletes `token:<accountId>` and throws
-`AuthExpiredError` to force re-auth. The MCP refresh path notices the
-missing upstream credential on its next exchange and burns the RT too.
+Only an OAuth `invalid_grant` response proves the current upstream RT is dead.
+That path compare-and-deletes `token:<accountId>` only when its encrypted value
+still matches the request's snapshot, then returns `AUTH_EXPIRED`. A concurrent
+login wins the race and is preserved. `invalid_client`, other OAuth responses,
+5xx/network failures, and lock contention return `UPSTREAM_UNAVAILABLE` while
+preserving the stored credential for retry.
 
 ## See also
 

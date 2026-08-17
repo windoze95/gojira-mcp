@@ -32,13 +32,13 @@ The success/failure envelope is JSON-encoded into the MCP `CallToolResult`:
 | Code | When | Caller action |
 |---|---|---|
 | `AUTH_REQUIRED` | No bearer, or bearer carries no `accountId`, or required side-channel (API token) not bound. | Walk the OAuth flow; call `gojira.bindApiToken` if needed. |
-| `AUTH_EXPIRED` | Upstream Atlassian rejected the credential (or our refresh attempt failed). | Re-authenticate via `/authorize`. |
+| `AUTH_EXPIRED` | The stored upstream credential has no RT, Atlassian explicitly returned OAuth `invalid_grant` for the current RT, or an API call still returned 401 after refresh had its chance. | Re-authenticate via `/authorize`. |
 | `INSUFFICIENT_PERMISSIONS` | 403 from Atlassian; pinned cloudId not accessible; org-admin verification failed; deployment has the group disabled. | Verify access, or escalate. |
 | `NOT_FOUND` | 404 from Atlassian; journal lookup for an unknown opId. | Verify the id. |
 | `VALIDATION_ERROR` | 400 from Atlassian (with field-level details); 409 conflict; local zod failures; bad cloudId; missing `commit:true`-required flag (rare). | Fix the input. |
 | `RATE_LIMITED` | Local bucket exhausted, or 429 from Atlassian after retry exhaustion. | Back off. |
-| `UPSTREAM_UNAVAILABLE` | 5xx from Atlassian after retry exhaustion; network errors. | Retry later. |
-| `UNEXPECTED_ERROR` | Anything not covered above (programming errors, unexpected response shapes). | Cite `reference_id` to operators. |
+| `UPSTREAM_UNAVAILABLE` | 5xx/network failure; refresh lock contention; or a refresh failure other than proven `invalid_grant` (including `invalid_client`). The stored credential is preserved. | Retry later; escalate persistent failures. |
+| `UNEXPECTED_ERROR` | Anything not covered above (programming errors, unexpected response shapes, or a preserved encrypted credential that cannot be decoded safely). | Cite `reference_id` to operators. |
 
 ## reference_id
 
@@ -65,6 +65,14 @@ cross-referenced to server logs by an operator.
 0    → UPSTREAM_UNAVAILABLE  (network unreachable)
 else → UNEXPECTED_ERROR
 ```
+
+The upstream **refresh endpoint** is classified more narrowly than ordinary API
+responses. A missing RT or an OAuth `invalid_grant` for the unchanged stored
+snapshot produces `AUTH_EXPIRED`; only that proven-dead snapshot is deleted.
+`invalid_client`, other OAuth errors, 5xx, network failures, and distributed-lock
+contention produce `UPSTREAM_UNAVAILABLE` and preserve the encrypted credential
+for retry. If a concurrent login replaced the snapshot, compare-and-swap guards
+prevent the older refresh response from overwriting or deleting it.
 
 The mapper extracts upstream messages from common Atlassian shapes:
 

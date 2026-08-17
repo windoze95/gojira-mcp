@@ -15,6 +15,7 @@ import { ALL_PERMISSION_GROUPS } from "../../src/tools/permissionGroups.js";
  */
 
 const PROFILES_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../deploy/profiles");
+const sharedEnv = parseEnvExample(join(PROFILES_DIR, "shared.env.example"));
 
 /** Documented tool count per profile — update alongside README + env comments. */
 const EXPECTED_COUNTS: Record<string, number> = {
@@ -49,6 +50,11 @@ const profiles = profileFiles.map((f) => {
 });
 
 describe("deploy/profiles/*.env.example", () => {
+  it("ships a valid contained refresh-reuse policy for the shared fleet", () => {
+    expect(["strict", "contain"]).toContain(sharedEnv.GOJIRA_REFRESH_REUSE_POLICY);
+    expect(sharedEnv.GOJIRA_REFRESH_REUSE_POLICY).toBe("contain");
+  });
+
   it("ships exactly the documented profiles", () => {
     expect(profiles.map((p) => p.name)).toEqual(Object.keys(EXPECTED_COUNTS).sort());
   });

@@ -15,7 +15,7 @@ Every route mounted by gojira-mcp, with auth requirements and behaviour.
 
 | Route | Method | Auth | Behaviour |
 |---|---|---|---|
-| `/register` | POST | none | RFC 7591 dynamic client registration. Returns `{ client_id, client_secret, ... }` with 90-day expiry. |
+| `/register` | POST | none | RFC 7591 dynamic client registration. Confidential clients receive `{ client_id, client_secret, ... }` with fixed 90-day secret expiry. Public `token_endpoint_auth_method=none` clients receive no secret and their 90-day registration TTL slides on successful use. |
 | `/authorize` | GET | none | Begin the OAuth flow. Accepts `client_id`, `redirect_uri`, `code_challenge`, `code_challenge_method=S256`, `state`, `response_type=code`, `scope`. Persists pending state, redirects to Atlassian. |
 | `/token` | POST | client_secret_basic / post | Exchange `authorization_code` or `refresh_token` for an MCP bearer. Validates PKCE (server-side) and client identity. |
 | `/revoke` | POST | client-scoped | Revoke an AT or RT. Verifies the calling client owns the token. |

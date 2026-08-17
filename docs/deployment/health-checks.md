@@ -7,6 +7,9 @@ Three layers cover the health story:
 3. **`gojira.health` tool** — MCP-side, accessible to clients that
    already hold a bearer.
 
+These are service checks, not credential-lifetime checks. A healthy server can
+still have an expired 30-day MCP RT or a client holding a stale generation.
+
 ## `GET /health`
 
 Plain HTTP, no auth, never rate-limited.
@@ -96,16 +99,31 @@ Returns the same shape as `/health` with a few additional fields:
 | `redis` field == `ok` | 30 s | the JSON body | `fail` for > 30 s |
 | Container CPU / mem | 1 min | docker stats / Prometheus exporter | sustained > 80% |
 | Atlassian 429 rate | 1 min | parse pino logs or audit sink | > N/min sustained |
-| `REFRESH_TOKEN_REUSE` events | per occurrence | log scrape or `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` | any |
+| `REFRESH_TOKEN_REUSE` events | per occurrence | log scrape or `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` | any; strict mode already revoked the family |
+| `REFRESH_TOKEN_REUSE_CONTAINED` events | per occurrence | log scrape or `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` | any; page and investigate because the live family was preserved |
 | Disk usage | 5 min | host monitor | > 80% on the Redis volume |
+
+## Authentication continuity
+
+MCP access tokens live for one hour. Each successful refresh rotates the RT and
+starts another 30-day TTL. A connection that is completely idle for more than
+30 days must authenticate again even when `/health` stays green.
+
+Where uninterrupted Codex access matters, run one harmless authenticated
+`gojira.whoami` per enabled profile roughly every 21 days and alert on failure.
+This is a credential-continuity probe, not a liveness probe: run it infrequently
+and through the same Codex credential store used by real work. Verify recovery
+with sequential `codex mcp login <name>` commands followed by fresh
+`gojira.whoami` calls; wait for each login to finish before starting the next.
 
 ## What not to monitor
 
 - Don't poll `/mcp` with credentials for liveness — it's stateful per
   session and creates noise in the audit log.
-- Don't `gojira.health` from an automated monitor on an interval — it
-  still consumes one rate-limit token per call (utility tools are
-  ungated but still counted). Use `/health` instead.
+- Don't `gojira.health` from a frequent automated liveness monitor — it still
+  consumes one rate-limit token per call (utility tools are ungated but still
+  counted). Use `/health` for liveness. The optional 21-day `gojira.whoami`
+  continuity probe above serves a different, deliberately low-frequency purpose.
 
 ## See also
 

@@ -5,8 +5,8 @@ to encounter.
 
 ## Incident: Refresh-token reuse detected
 
-**Trigger:** `REFRESH_TOKEN_REUSE` log line, or a webhook fired to
-`GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK`.
+**Trigger:** `REFRESH_TOKEN_REUSE` or `REFRESH_TOKEN_REUSE_CONTAINED` log line,
+or a webhook fired to `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK`.
 
 **Severity:** High by default; could be benign (client bug or a delayed/lost
 refresh response) or malicious (theft). A normal concurrent retry inside the
@@ -15,17 +15,22 @@ incident.
 
 **Playbook:**
 
-1. The family is already destroyed automatically — no action needed
-   to stop further attacker access.
-2. Identify the user from the event's `accountId`.
-3. Reach out to the user; confirm whether they noticed any unexpected
+1. Check `policy` and `action`. `strict` / `family_revoked` means the family is
+   already destroyed. `contain` / `family_preserved` means the stale caller got
+   retryable `server_error`, but the current successor remains live; page and
+   investigate rather than assuming attacker access stopped.
+2. Identify the user and client from the event's `accountId` and `clientId`.
+3. For a contained event, explicitly revoke or reauthenticate if compromise
+   cannot be ruled out. The server never returns the live successor to the stale
+   caller.
+4. Reach out to the user; confirm whether they noticed any unexpected
    logout or behaviour.
-4. If suspicious: walk through
+5. If suspicious: walk through
    [refresh-reuse.md](../security/refresh-reuse.md) — pivot to the
    audit log to enumerate any tool calls in the window before the
    reuse event, then to the journal to inspect the actual changes,
    then revert what's reversible.
-5. If benign (client bug or delayed retry): note the client's name + version
+6. If benign (client bug or delayed retry): note the client's name + version
    from the audit log's `client_id`; file with the client developers. Repeated
    informational idempotent-replay events without reuse are telemetry, not an
    automatic incident.
@@ -46,10 +51,11 @@ key alone is useless.
 1. Generate a new key (`npm run generate-key`).
 2. Decide on a window: announce a maintenance period (5-10 minutes is
    enough).
-3. Stop the service.
-4. Update `TOKEN_ENCRYPTION_KEY` in your secret store.
-5. Delete every `token:*` and `apitoken:*` from Redis — they're
-   unreadable under the new key anyway. Run from the repo root; under a
+3. Stop every app container that shares the Redis namespace; keep Redis
+   available for cleanup. Do not rotate one profile at a time.
+4. With the old key still configured, delete every `token:*` and
+   `apitoken:*` from Redis — they will be unreadable under the new key. Run from
+   the repo root; under a
    deploy profile add the `-p` you deployed with (`-p gojira-prod`), since
    the stack sets no `container_name` and there is no `gojira-redis`
    container to address:
@@ -58,7 +64,7 @@ key alone is useless.
    "${RCLI[@]}" --scan --pattern "token:*"    | xargs -L 100 "${RCLI[@]}" DEL
    "${RCLI[@]}" --scan --pattern "apitoken:*" | xargs -L 100 "${RCLI[@]}" DEL
    ```
-6. Also revoke `refresh_family:*` and the corresponding `mcp_token:*`,
+5. Also revoke `refresh_family:*` and the corresponding `mcp_token:*`,
    `mcp_refresh:*`, `rt_family:*`, `rt_family_account:*` keys — bearers
    issued under the old key reference Atlassian credentials that won't
    decrypt:
@@ -69,8 +75,13 @@ key alone is useless.
    ```
    (`rt_family*` without the colon sweeps `rt_family:*` and
    `rt_family_account:*` in one pass.)
-7. Restart the service.
-8. All users re-authenticate from scratch.
+6. Delete `token_encryption_key_fingerprint:v1` only after the encrypted blobs
+   and dependent bearer state are gone. Never delete the marker alone to bypass
+   the startup mismatch guard.
+7. Update `TOKEN_ENCRYPTION_KEY` identically for every app container, then
+   restart the fleet. A mismatch fails before listening.
+8. All users re-authenticate from scratch, one enabled connection at a time;
+   verify each with `gojira.whoami` and a harmless upstream read.
 
 ### `ATLASSIAN_OAUTH_CLIENT_SECRET` leaked
 

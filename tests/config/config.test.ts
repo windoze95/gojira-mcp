@@ -25,6 +25,7 @@ const MANAGED_KEYS = [
   "GOJIRA_ORG_ADMIN_TOKEN",
   "GOJIRA_ORG_ID",
   "GOJIRA_ORG_ADMIN_ACCOUNT_IDS",
+  "GOJIRA_REFRESH_REUSE_POLICY",
   "GOJIRA_ENABLED_GROUPS",
   "GOJIRA_INSTANCE_NAME",
 ] as const;
@@ -84,6 +85,21 @@ describe("loadConfig", () => {
     process.env.GOJIRA_INSTANCE_NAME = "gojira-readonly";
     const cfg = loadConfig();
     expect(cfg.instanceName).toBe("gojira-readonly");
+  });
+
+  it("defaults refresh reuse handling to strict", () => {
+    expect(loadConfig().refreshReusePolicy).toBe("strict");
+  });
+
+  it("accepts containment refresh reuse handling", () => {
+    process.env.GOJIRA_REFRESH_REUSE_POLICY = "contain";
+    expect(loadConfig().refreshReusePolicy).toBe("contain");
+  });
+
+  it("rejects an unknown refresh reuse policy", () => {
+    process.env.GOJIRA_REFRESH_REUSE_POLICY = "ignore";
+    expect(() => loadConfig()).toThrow(ExitCalled);
+    expect(loggedErrors()).toContain("GOJIRA_REFRESH_REUSE_POLICY");
   });
 
   it("rejects instance names outside the allowed charset", () => {

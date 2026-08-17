@@ -1,6 +1,7 @@
 import type { RedisType } from "../redis/client.js";
 import { decrypt, encrypt } from "./encryption.js";
 import { logger } from "../utils/logger.js";
+import { CredentialStoreUnreadableError } from "./tokenStore.js";
 
 export interface StoredApiToken {
   account_id: string;
@@ -30,14 +31,15 @@ export class ApiTokenStore {
     if (!blob) return null;
     try {
       const json = decrypt(blob, this.key);
-      return JSON.parse(json) as StoredApiToken;
-    } catch (err) {
+      const token = JSON.parse(json) as unknown;
+      if (!isStoredApiToken(token)) throw new Error("stored API credential has an invalid shape");
+      return token;
+    } catch {
       logger.warn(
-        { err: err instanceof Error ? err.message : String(err), accountId },
-        "API token decrypt failed; purging",
+        { accountId, credential: "api_token", reason: "decode_failed" },
+        "Stored credential could not be read; preserving encrypted entry",
       );
-      await this.redis.del(this.k(accountId));
-      return null;
+      throw new CredentialStoreUnreadableError("api_token");
     }
   }
 
@@ -50,4 +52,19 @@ export class ApiTokenStore {
   async delete(accountId: string): Promise<void> {
     await this.redis.del(this.k(accountId));
   }
+}
+
+function isStoredApiToken(value: unknown): value is StoredApiToken {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const token = value as Partial<StoredApiToken>;
+  return (
+    typeof token.account_id === "string" &&
+    typeof token.email === "string" &&
+    typeof token.token === "string" &&
+    (typeof token.cloud_id === "string" || token.cloud_id === null) &&
+    (typeof token.site_url === "string" || token.site_url === null) &&
+    (typeof token.display_name === "string" || token.display_name === null) &&
+    typeof token.added_at === "number" &&
+    Number.isFinite(token.added_at)
+  );
 }

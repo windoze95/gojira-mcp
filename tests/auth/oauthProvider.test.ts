@@ -1,17 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
+import axios from "axios";
+import { ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { GojiraOAuthProvider } from "../../src/auth/oauthProvider.js";
 import { RefreshFamily } from "../../src/auth/refreshFamily.js";
 import { makeRedis } from "../helpers/redis.js";
 import type { AppConfig } from "../../src/config.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { logger } from "../../src/utils/logger.js";
 
-function buildConfig(mcpServerUrl = "http://localhost:8081"): AppConfig {
+function buildConfig(
+  opts: {
+    mcpServerUrl?: string;
+    refreshReusePolicy?: "strict" | "contain";
+    refreshReuseAlertWebhook?: string | null;
+  } = {},
+): AppConfig {
   return {
     nodeEnv: "test",
     logLevel: "fatal",
     mcpPort: 8081,
-    mcpServerUrl,
+    mcpServerUrl: opts.mcpServerUrl ?? "http://localhost:8081",
     allowedOrigins: ["*"],
     redisUrl: "redis://mock",
     tokenEncryptionKey: randomBytes(32),
@@ -27,7 +36,8 @@ function buildConfig(mcpServerUrl = "http://localhost:8081"): AppConfig {
     orgAdmin: { enabled: false, token: null, orgId: null },
     audit: { mainTarget: "stdout", orgAdminTarget: "stdout" },
     journal: { ttlDays: 30 },
-    refreshReuseAlertWebhook: null,
+    refreshReuseAlertWebhook: opts.refreshReuseAlertWebhook ?? null,
+    refreshReusePolicy: opts.refreshReusePolicy ?? "strict",
     nearLimitExtraDeduct: 5,
     enabledGroups: [],
   } as unknown as AppConfig;
@@ -102,6 +112,18 @@ describe("GojiraOAuthProvider — rotating refresh tokens with reuse detection",
     expect(await redis.get(`mcp_refresh:${first.refresh_token!}`)).toBeNull();
     expect(await redis.get(`rt_family:${first.refresh_token!}`)).toBeTruthy();
     expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeTruthy();
+  });
+
+  it("slides the shared upstream credential TTL during a successful MCP rotation", async () => {
+    const first = await provider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    await redis.expire(`token:${accountId}`, 10);
+
+    await provider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+
+    expect(await redis.ttl(`token:${accountId}`)).toBeGreaterThan(89 * 24 * 60 * 60);
   });
 
   it("returns the exact winning pair to two concurrent refreshes", async () => {
@@ -252,12 +274,232 @@ describe("GojiraOAuthProvider — rotating refresh tokens with reuse detection",
         reason:
           "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
         accountId,
+        clientId: fakeClient.client_id,
         webhookUrl: null,
+        policy: "strict",
+        action: "family_revoked",
       },
       { refreshTokensRevoked: 1, accessTokensRevoked: 2 },
     );
     expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeNull();
     expect(await redis.get(`mcp_token:${second.access_token}`)).toBeNull();
+  });
+
+  it("contains a stale parent without revoking, rotating, or disclosing the live head", async () => {
+    const containProvider = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({ refreshReusePolicy: "contain" }),
+    });
+    const first = await containProvider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    const second = await containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    const firstIndex = await redis.get(`rt_family:${first.refresh_token!}`);
+    const familyId = familyIdFromIndex(firstIndex!);
+    await redis.del(`mcp_refresh_replay:${first.refresh_token!}`);
+
+    let caught: unknown;
+    try {
+      await containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ServerError);
+    const response = (caught as ServerError).toResponseObject();
+    expect(response).toMatchObject({ error: "server_error" });
+    const serializedError = JSON.stringify(response);
+    expect(serializedError).not.toContain(second.access_token);
+    expect(serializedError).not.toContain(second.refresh_token!);
+
+    expect(await redis.get(`mcp_token:${second.access_token}`)).toBeTruthy();
+    expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeTruthy();
+    expect(await redis.smembers(`refresh_family:${familyId}`)).toEqual([second.refresh_token]);
+    expect(await redis.keys("mcp_refresh:*")).toEqual([`mcp_refresh:${second.refresh_token!}`]);
+    await expect(containProvider.verifyAccessToken(second.access_token)).resolves.toBeTruthy();
+  });
+
+  it("contains an older parent after its receipt child rotated and preserves the current head", async () => {
+    const containProvider = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({ refreshReusePolicy: "contain" }),
+    });
+    const first = await containProvider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    const second = await containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    const third = await containProvider.exchangeRefreshToken(fakeClient, second.refresh_token!);
+
+    await expect(
+      containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!),
+    ).rejects.toBeInstanceOf(ServerError);
+    expect(await redis.get(`mcp_token:${third.access_token}`)).toBeTruthy();
+    expect(await redis.get(`mcp_refresh:${third.refresh_token!}`)).toBeTruthy();
+    await expect(containProvider.verifyAccessToken(third.access_token)).resolves.toBeTruthy();
+  });
+
+  it("does not contain, disclose, or burn a stale parent presented by the wrong client", async () => {
+    const reportReuse = vi.spyOn(RefreshFamily.prototype, "reportReuse");
+    const containProvider = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({ refreshReusePolicy: "contain" }),
+    });
+    const first = await containProvider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    const second = await containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    await redis.del(`mcp_refresh_replay:${first.refresh_token!}`);
+    const otherClient: OAuthClientInformationFull = { ...fakeClient, client_id: "other" };
+
+    await expect(
+      containProvider.exchangeRefreshToken(otherClient, first.refresh_token!),
+    ).rejects.toThrow(/different client/);
+    expect(reportReuse).not.toHaveBeenCalled();
+    expect(await redis.get(`mcp_token:${second.access_token}`)).toBeTruthy();
+    expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeTruthy();
+  });
+
+  it("emits sanitized contained telemetry and webhook payload with client identity", async () => {
+    const webhookUrl = "https://alerts.example.test/refresh-reuse";
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    const post = vi.spyOn(axios, "post").mockResolvedValue({ status: 204 } as never);
+    const containProvider = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({
+        refreshReusePolicy: "contain",
+        refreshReuseAlertWebhook: webhookUrl,
+      }),
+    });
+    const first = await containProvider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    const second = await containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    const familyId = familyIdFromIndex((await redis.get(`rt_family:${first.refresh_token!}`))!);
+    await redis.del(`mcp_refresh_replay:${first.refresh_token!}`);
+
+    await expect(
+      containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!),
+    ).rejects.toBeInstanceOf(ServerError);
+
+    expect(warn).toHaveBeenCalledWith(
+      {
+        event: "REFRESH_TOKEN_REUSE_CONTAINED",
+        familyId,
+        accountId,
+        clientId: fakeClient.client_id,
+        policy: "contain",
+        action: "family_preserved",
+        reason:
+          "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
+        refresh_tokens_revoked: 0,
+        access_tokens_revoked: 0,
+        live_refresh_tokens: 1,
+        live_access_tokens: 2,
+      },
+      "Stale refresh token contained; live family preserved",
+    );
+    expect(post).toHaveBeenCalledOnce();
+    const [url, body, options] = post.mock.calls[0]!;
+    expect(url).toBe(webhookUrl);
+    expect(options).toEqual({ timeout: 5000 });
+    expect(body).toEqual({
+      event: "REFRESH_TOKEN_REUSE_CONTAINED",
+      family_id: familyId,
+      account_id: accountId,
+      client_id: fakeClient.client_id,
+      policy: "contain",
+      action: "family_preserved",
+      reason:
+        "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
+      refresh_tokens_revoked: 0,
+      access_tokens_revoked: 0,
+      live_refresh_tokens: 1,
+      live_access_tokens: 2,
+      ts: expect.any(String),
+    });
+    expect(JSON.stringify(body)).not.toContain(first.refresh_token!);
+    expect(JSON.stringify(body)).not.toContain(second.refresh_token!);
+    expect(JSON.stringify(body)).not.toContain(second.access_token);
+  });
+
+  it("deduplicates contained-reuse alerts while a stale process keeps retrying", async () => {
+    const reportReuse = vi.spyOn(RefreshFamily.prototype, "reportReuse");
+    const containProvider = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({ refreshReusePolicy: "contain" }),
+    });
+    const first = await containProvider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    const second = await containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    await redis.del(`mcp_refresh_replay:${first.refresh_token!}`);
+
+    await expect(
+      containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!),
+    ).rejects.toBeInstanceOf(ServerError);
+    await expect(
+      containProvider.exchangeRefreshToken(fakeClient, first.refresh_token!),
+    ).rejects.toBeInstanceOf(ServerError);
+
+    expect(reportReuse).toHaveBeenCalledTimes(1);
+    expect(
+      await redis.ttl(`mcp_refresh_reuse_notice:${first.refresh_token!}`),
+    ).toBeGreaterThan(0);
+    expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeTruthy();
+  });
+
+  it("keeps the strict webhook event and includes the client id after revocation", async () => {
+    const webhookUrl = "https://alerts.example.test/refresh-reuse";
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    const post = vi.spyOn(axios, "post").mockResolvedValue({ status: 204 } as never);
+    const strictProvider = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({ refreshReuseAlertWebhook: webhookUrl }),
+    });
+    const first = await strictProvider.mintMcpTokens({
+      accountId,
+      clientId: fakeClient.client_id,
+    });
+    const second = await strictProvider.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    const familyId = familyIdFromIndex((await redis.get(`rt_family:${first.refresh_token!}`))!);
+    await redis.del(`mcp_refresh_replay:${first.refresh_token!}`);
+
+    await expect(
+      strictProvider.exchangeRefreshToken(fakeClient, first.refresh_token!),
+    ).rejects.toThrow(/invalid or revoked/);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "REFRESH_TOKEN_REUSE",
+        familyId,
+        accountId,
+        clientId: fakeClient.client_id,
+        policy: "strict",
+        action: "family_revoked",
+        refresh_tokens_revoked: 1,
+        access_tokens_revoked: 2,
+      }),
+      "Refresh token reuse detected; family revoked",
+    );
+    expect(post).toHaveBeenCalledWith(
+      webhookUrl,
+      expect.objectContaining({
+        event: "REFRESH_TOKEN_REUSE",
+        family_id: familyId,
+        account_id: accountId,
+        client_id: fakeClient.client_id,
+        policy: "strict",
+        action: "family_revoked",
+      }),
+      { timeout: 5000 },
+    );
+    expect(await redis.get(`mcp_token:${second.access_token}`)).toBeNull();
+    expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeNull();
   });
 
   it("consumes the RT without minting a successor when upstream credentials are gone", async () => {
@@ -294,11 +536,11 @@ describe("GojiraOAuthProvider — cross-instance issuer isolation (shared Redis)
     redis = makeRedis();
     instanceA = new GojiraOAuthProvider({
       redis,
-      config: buildConfig("http://gojira.internal:8081"),
+      config: buildConfig({ mcpServerUrl: "http://gojira.internal:8081" }),
     });
     instanceB = new GojiraOAuthProvider({
       redis,
-      config: buildConfig("http://gojira.internal:8082"),
+      config: buildConfig({ mcpServerUrl: "http://gojira.internal:8082" }),
     });
     await redis.set(`token:${accountId}`, "encrypted-blob");
   });
@@ -339,24 +581,38 @@ describe("GojiraOAuthProvider — cross-instance issuer isolation (shared Redis)
     expect(info.extra?.accountId).toBe(accountId);
   });
 
-  it("rejects a sibling issuer during and after replay grace without burning the family", async () => {
-    const first = await instanceA.mintMcpTokens({
+  it("contain mode rejects a sibling issuer during and after replay grace without burning the family", async () => {
+    const containA = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({
+        mcpServerUrl: "http://gojira.internal:8081",
+        refreshReusePolicy: "contain",
+      }),
+    });
+    const containB = new GojiraOAuthProvider({
+      redis,
+      config: buildConfig({
+        mcpServerUrl: "http://gojira.internal:8082",
+        refreshReusePolicy: "contain",
+      }),
+    });
+    const first = await containA.mintMcpTokens({
       accountId,
       clientId: fakeClient.client_id,
     });
-    const second = await instanceA.exchangeRefreshToken(fakeClient, first.refresh_token!);
+    const second = await containA.exchangeRefreshToken(fakeClient, first.refresh_token!);
 
     await expect(
-      instanceB.exchangeRefreshToken(fakeClient, first.refresh_token!),
+      containB.exchangeRefreshToken(fakeClient, first.refresh_token!),
     ).rejects.toThrow(/different gojira-mcp instance/);
     expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeTruthy();
 
     await redis.del(`mcp_refresh_replay:${first.refresh_token!}`);
     await expect(
-      instanceB.exchangeRefreshToken(fakeClient, first.refresh_token!),
+      containB.exchangeRefreshToken(fakeClient, first.refresh_token!),
     ).rejects.toThrow(/different gojira-mcp instance/);
     expect(await redis.get(`mcp_refresh:${second.refresh_token!}`)).toBeTruthy();
-    await expect(instanceA.verifyAccessToken(second.access_token)).resolves.toBeTruthy();
+    await expect(containA.verifyAccessToken(second.access_token)).resolves.toBeTruthy();
   });
 
   it("grandfathers pre-upgrade tokens that carry no issuer stamp", async () => {

@@ -91,6 +91,7 @@ const ConfigSchema = z
 
     // Refresh reuse alerting
     GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK: z.string().url().optional(),
+    GOJIRA_REFRESH_REUSE_POLICY: z.enum(["strict", "contain"]).default("strict"),
 
     // Usage metrics read endpoint (GET /metrics/usage); disabled when unset.
     GOJIRA_METRICS_TOKEN: z
@@ -215,6 +216,8 @@ export type AppConfig = Readonly<{
   /** Per-instance display name (GOJIRA_INSTANCE_NAME); "gojira-mcp" unless set. */
   instanceName: string;
   refreshReuseAlertWebhook: string | null;
+  /** Strict burns a stale RT family; contain preserves it and returns server_error. */
+  refreshReusePolicy: "strict" | "contain";
   nearLimitExtraDeduct: number;
   /**
    * Permission groups this deployment registers. Operator allowlist —
@@ -284,6 +287,7 @@ export function loadConfig(): AppConfig {
     ui: { enabled: v.GOJIRA_UI_ENABLED },
     instanceName: v.GOJIRA_INSTANCE_NAME,
     refreshReuseAlertWebhook: v.GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK ?? null,
+    refreshReusePolicy: v.GOJIRA_REFRESH_REUSE_POLICY,
     nearLimitExtraDeduct: v.GOJIRA_NEAR_LIMIT_EXTRA_DEDUCT,
     enabledGroups: v.GOJIRA_ENABLED_GROUPS,
   });

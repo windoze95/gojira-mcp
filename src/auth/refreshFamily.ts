@@ -16,6 +16,25 @@ import { logger } from "../utils/logger.js";
 
 const FAMILY_TTL_SECONDS = 30 * 24 * 60 * 60; // 30d, matches RT lifetime.
 
+export type RefreshReusePolicy = "strict" | "contain";
+export type RefreshReuseAction = "family_revoked" | "family_preserved";
+
+export interface RefreshReuseReportOptions {
+  reason: string;
+  accountId?: string;
+  clientId?: string;
+  webhookUrl?: string | null;
+  policy?: RefreshReusePolicy;
+  action?: RefreshReuseAction;
+}
+
+export interface RefreshReuseCounts {
+  refreshTokensRevoked: number;
+  accessTokensRevoked: number;
+  liveRefreshTokens?: number;
+  liveAccessTokens?: number;
+}
+
 export class RefreshFamily {
   constructor(private readonly redis: RedisType) {}
 
@@ -64,7 +83,7 @@ export class RefreshFamily {
    */
   async destroyFamily(
     familyId: string,
-    opts: { reason: string; accountId?: string; webhookUrl?: string | null },
+    opts: RefreshReuseReportOptions,
   ): Promise<{ refreshTokensRevoked: number; accessTokensRevoked: number }> {
     const refreshTokens = await this.listRefreshTokens(familyId);
     const accessTokens = await this.listAccessTokens(familyId);
@@ -91,20 +110,35 @@ export class RefreshFamily {
    */
   async reportReuse(
     familyId: string,
-    opts: { reason: string; accountId?: string; webhookUrl?: string | null },
-    counts: { refreshTokensRevoked: number; accessTokensRevoked: number },
+    opts: RefreshReuseReportOptions,
+    counts: RefreshReuseCounts,
   ): Promise<void> {
+    const policy = opts.policy ?? "strict";
+    const action = opts.action ?? "family_revoked";
+    const contained = action === "family_preserved";
+    const event = contained ? "REFRESH_TOKEN_REUSE_CONTAINED" : "REFRESH_TOKEN_REUSE";
 
     logger.warn(
       {
-        event: "REFRESH_TOKEN_REUSE",
+        event,
         familyId,
         accountId: opts.accountId,
+        clientId: opts.clientId,
+        policy,
+        action,
         reason: opts.reason,
         refresh_tokens_revoked: counts.refreshTokensRevoked,
         access_tokens_revoked: counts.accessTokensRevoked,
+        ...(counts.liveRefreshTokens !== undefined
+          ? { live_refresh_tokens: counts.liveRefreshTokens }
+          : {}),
+        ...(counts.liveAccessTokens !== undefined
+          ? { live_access_tokens: counts.liveAccessTokens }
+          : {}),
       },
-      "Refresh token reuse detected; family revoked",
+      contained
+        ? "Stale refresh token contained; live family preserved"
+        : "Refresh token reuse detected; family revoked",
     );
 
     if (opts.webhookUrl) {
@@ -112,12 +146,21 @@ export class RefreshFamily {
         await axios.post(
           opts.webhookUrl,
           {
-            event: "REFRESH_TOKEN_REUSE",
+            event,
             family_id: familyId,
             account_id: opts.accountId ?? null,
+            client_id: opts.clientId ?? null,
+            policy,
+            action,
             reason: opts.reason,
             refresh_tokens_revoked: counts.refreshTokensRevoked,
             access_tokens_revoked: counts.accessTokensRevoked,
+            ...(counts.liveRefreshTokens !== undefined
+              ? { live_refresh_tokens: counts.liveRefreshTokens }
+              : {}),
+            ...(counts.liveAccessTokens !== undefined
+              ? { live_access_tokens: counts.liveAccessTokens }
+              : {}),
             ts: new Date().toISOString(),
           },
           { timeout: 5000 },

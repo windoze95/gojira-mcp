@@ -20,7 +20,7 @@
 |---|---|
 | External attacker over the public network | Can hit `/health`, `/.well-known/*`, `/register`, `/authorize`, `/oauth/atlassian-callback`. Cannot reach `/mcp` without a valid bearer. |
 | Compromised MCP client | Can replay its own bearer until it expires, can request new bearers via /authorize but only against scope they were granted. |
-| Stolen MCP refresh token | A same-client/same-issuer duplicate can claim the exact winning pair for a fixed five-second idempotency window. A later replay of a bound version-2 token, or one whose immediate child is no longer live, atomically revokes the family. Already-stale unbound legacy indexes are rejected without a burn. |
+| Stolen MCP refresh token | A same-client/same-issuer duplicate can claim the exact winning pair for a fixed five-second idempotency window. A later replay of a bound version-2 token, or one whose immediate child is no longer live, is rejected and alerted. `strict` atomically revokes the family; `contain` preserves the successor and requires operator investigation. Already-stale unbound legacy indexes are rejected without a burn. |
 | Stolen Atlassian token (upstream) | Outside gojira's threat boundary — Atlassian's own revocation applies. |
 | Stolen `TOKEN_ENCRYPTION_KEY` alone | Useless without Redis snapshot. |
 | Stolen Redis snapshot alone | Encrypted upstream/API credential blobs remain unreadable without the key, but plaintext MCP bearer key names and any in-flight replay receipt values are usable until expiry or revocation. |
@@ -63,9 +63,12 @@ and [refresh-reuse.md](refresh-reuse.md). A bound rotated-away RT has one fixed,
 non-sliding five-second receipt for legitimate same-client/same-issuer retries.
 Possession of the old bearer plus its client identity can claim that exact
 immediate-successor pair during the window. Afterward—or once the child is no
-longer live—replay atomically revokes the family and emits a structured warn
-log plus optional webhook. An already-stale pre-upgrade index has no trustworthy
-binding and is rejected without revocation until it expires.
+longer live—replay is rejected and emits a structured warn log plus optional
+webhook. The application default `strict` policy atomically revokes the family.
+The split-profile fleet defaults to `contain`, which preserves the successor to
+avoid fleet-wide logout from a delayed Codex process but trades automatic
+revocation for alert-and-investigate. An already-stale pre-upgrade index has no
+trustworthy binding and is rejected without revocation until it expires.
 
 ### admin_org caller-verification ratchets up
 
@@ -117,6 +120,10 @@ somehow leaked through) the dispatch wrapper rejects the call.
   attacker has org-wide control until you revoke it. Mitigation:
   isolate `admin_org` to its own instance; minimize the number of humans
   with access to the env file; rotate regularly.
+- **Contained RT reuse.** Under `GOJIRA_REFRESH_REUSE_POLICY=contain`, a stolen
+  current successor is not automatically revoked when its stale parent appears.
+  Mitigation: alert on every `REFRESH_TOKEN_REUSE_CONTAINED`, investigate the
+  named client promptly, and reauthenticate when compromise cannot be ruled out.
 
 ## See also
 

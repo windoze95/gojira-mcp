@@ -397,6 +397,16 @@ docker compose -p gojira -f docker-compose.profiles.yml \
   --env-file deploy/profiles/shared.env up -d --build
 ```
 
+`gojira` is the fresh-install example. On upgrade, reuse the project name that
+already owns the deployment's Redis volume (for example, an existing
+`gojira-fleet` install must remain `gojira-fleet`); changing `-p` strands the
+fleet's encrypted credentials, OAuth clients, and token families. Existing
+`shared.env` files created before the refresh-reuse setting was introduced must
+add `GOJIRA_REFRESH_REUSE_POLICY=contain` (or deliberately choose `strict`)
+before `npm run preflight:profiles`. Containment preserves the live successor
+and emits `REFRESH_TOKEN_REUSE_CONTAINED`; monitor that event and investigate it
+rather than treating containment as proof that the replay was safe.
+
 Reachability: the MCP SDK only accepts `http://` server URLs for
 localhost — for a LAN hostname either opt out explicitly
 (`MCP_DANGEROUSLY_ALLOW_INSECURE_ISSUER_URL=true`) or run https with
@@ -486,7 +496,7 @@ typically gets wrong:
 
 1. **Per-user delegation.** Every upstream Atlassian call is attributable to a real human; no service-account proxying.
 2. **End-to-end identity binding.** Tools cannot accept a caller/requester field from the client; identity is derived from the bearer.
-3. **Encrypted-at-rest credentials.** AES-256-GCM, unique IV per write, tampered blobs auto-purge.
+3. **Encrypted-at-rest credentials.** AES-256-GCM, unique IV per write; unreadable or tampered blobs are preserved for operator recovery and fail closed with sanitized telemetry.
 4. **Distributed refresh lock with compare-and-delete.** No thundering herd at token expiry; no accidental unlock by a stale holder.
 5. **Atomic one-time-use** for state and codes (`GETDEL`), plus a Redis-atomic refresh-family transition that cannot resurrect a revoked family.
 6. **OAuth error pass-through** to MCP client's `redirect_uri` — never a hung client on JSON 500.
@@ -494,7 +504,7 @@ typically gets wrong:
 8. **Fail-open rate limiting, fail-closed auth.** Availability for non-security failures; never bypass identity.
 9. **Health endpoint outside the auth boundary** — observability without privilege.
 10. **Token redaction in logs** as defense in depth.
-11. **Rotating MCP refresh tokens with bounded idempotency and reuse detection.** Same-client/same-issuer duplicates within a fixed five-second window converge on the exact winning pair; later replay, or replay after the immediate child is no longer live, atomically burns the family and emits `REFRESH_TOKEN_REUSE`.
+11. **Rotating MCP refresh tokens with bounded idempotency and reuse detection.** Same-client/same-issuer duplicates within a fixed five-second window converge on the exact winning pair. Later replay is rejected and alerted: `strict` atomically burns the family, while profile-fleet `contain` preserves the live successor for alert-and-investigate.
 12. **Operation journal with prior-state snapshots and revert.** Every destructive admin write captures `before` state; revertible operations can be undone by replaying the inverse mutation as a new journaled op.
 13. **Operator-controlled tool surface, least-privilege by default.** Permission groups + the `admin_org` gate are the runtime knobs. `GOJIRA_ENABLED_GROUPS` is an explicit allowlist (no implicit default) that filters the registered surface at session creation and again at dispatch. No client-side scope grammar to mismanage.
 14. **Site pinning at deploy time.** `ATLASSIAN_PINNED_CLOUD_ID` refuses any tool invocation whose target cloudId differs from the pinned value.

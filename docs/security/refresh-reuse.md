@@ -16,8 +16,8 @@ clients with overlapping request paths can both present the same RT before the
 winning response is stored. The bounded receipt handles that case without a
 logout or security alert.
 
-A replay becomes a `REFRESH_TOKEN_REUSE` incident when its receipt has expired
-or its immediate child is no longer live. At that point it can indicate:
+A replay becomes a reuse incident when its receipt has expired or its immediate
+child is no longer live. At that point it can indicate:
 
 1. **Theft.** An attacker captured an RT and presented it later.
 2. **Client bug.** A client kept retrying an already-rotated RT beyond the
@@ -26,7 +26,20 @@ or its immediate child is no longer live. At that point it can indicate:
    response and did not recover within five seconds.
 
 The server cannot distinguish those cases at detection time. It therefore
-burns the family after the bounded retry allowance.
+always rejects and alerts after the bounded retry allowance. The configured
+reuse policy decides whether to burn or preserve the live successor family.
+
+## Strict versus contain
+
+| Policy | Event | Family action | Operational tradeoff |
+|---|---|---|---|
+| `strict` (application default) | `REFRESH_TOKEN_REUSE` | Atomically revoke every live AT and RT; return `invalid_grant`. | Strong automatic containment of possible theft, but one delayed shared client can log the entire family out. |
+| `contain` (split-profile fleet default) | `REFRESH_TOKEN_REUSE_CONTAINED` | Preserve the live successor family; return `server_error` without returning the successor. | Avoids fleet-wide logout from a delayed Codex process, but requires alert-and-investigate because possible stolen successors are not automatically revoked. |
+
+Use `contain` only with reliable event monitoring. The retryable `server_error`
+is deliberate: Codex can reread/retry the latest authoritative Keychain
+credential instead of purging it as a terminal `invalid_grant`. Containment
+never returns or logs the live successor.
 
 ## Idempotency boundary
 
@@ -49,9 +62,10 @@ client identity to receive the winning pair for up to five seconds. Keeping the
 window tiny, issuer-bound, and one-generation-only limits that tradeoff while
 preventing legitimate concurrent Codex refreshes from revoking themselves.
 
-## What gets burned
+## Family action
 
-The same Redis Lua transition that classifies stale reuse removes:
+Under `strict`, the same Redis Lua transition that classifies stale reuse
+removes:
 
 ```
 mcp_refresh:<each live RT>
@@ -69,6 +83,12 @@ recreate the family after revocation. Afterward:
 - the user must reauthenticate via `/authorize`; and
 - upstream Atlassian credentials at `token:<accountId>` remain untouched.
 
+Under `contain`, the transition validates the stale parent and counts the live
+family without deleting it. The stale caller gets `server_error` and no
+successor, while a process holding the current successor can continue. Treat the
+event as a real incident: identify the client, validate its origin, and
+explicitly revoke or reauthenticate if compromise cannot be ruled out.
+
 ## Audit events
 
 An accepted duplicate emits an info-level event and is not an incident:
@@ -83,23 +103,49 @@ An accepted duplicate emits an info-level event and is not an incident:
 }
 ```
 
-A stale replay emits a warn-level event after the atomic burn:
+A stale replay emits a warn-level policy event. Strict mode emits:
 
 ```json
 {
   "event": "REFRESH_TOKEN_REUSE",
   "familyId": "...",
   "accountId": "...",
+  "clientId": "...",
+  "policy": "strict",
+  "action": "family_revoked",
   "reason": "Refresh token reuse: replay fell outside the idempotency window or its immediate successor was no longer live.",
   "refresh_tokens_revoked": 1,
   "access_tokens_revoked": 2
 }
 ```
 
-If `GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` is configured, gojira-mcp POSTs
-the reuse event with snake-case family/account fields and a `ts` value. The
-request times out after five seconds; delivery failure is logged but does not
-block the already-completed revocation.
+Contain mode emits:
+
+```json
+{
+  "event": "REFRESH_TOKEN_REUSE_CONTAINED",
+  "familyId": "...",
+  "accountId": "...",
+  "clientId": "...",
+  "policy": "contain",
+  "action": "family_preserved",
+  "refresh_tokens_revoked": 0,
+  "access_tokens_revoked": 0,
+  "live_refresh_tokens": 1,
+  "live_access_tokens": 1
+}
+```
+
+Both events carry the client, selected policy/action, and live/revoked counts. If
+`GOJIRA_REFRESH_REUSE_ALERT_WEBHOOK` is configured, gojira-mcp POSTs the event
+with snake-case family/account/client fields and a `ts` value. The request times
+out after five seconds; delivery failure is logged but does not block the
+already-completed revocation or contained rejection.
+
+A retrying stale process still receives `server_error` on every contained
+presentation, but identical contained-reuse logs and webhooks are deduplicated
+for five minutes per stale RT. This bounds alert floods without extending the
+five-second credential-replay window or suppressing a different stale token.
 
 Wire the webhook to:
 
@@ -124,8 +170,8 @@ not consume or revoke the legitimate family's credentials.
 
 - **First-use stolen RT.** The attacker can win the first rotation. During the
   next five seconds, both holders can obtain the same child pair. A parent
-  replay after that boundary burns the family. The attacker may still use the
-  child AT until expiry or revocation.
+  replay after that boundary burns the family under `strict`; `contain` alerts
+  but leaves the attacker's possible successor live until operator action.
 - **Same-client theft inside five seconds.** The server intentionally cannot
   distinguish it from a legitimate concurrent retry. Correlate the
   informational replay event with network and client telemetry if available.
@@ -142,7 +188,7 @@ not consume or revoke the legitimate family's credentials.
 
 ## Incident-response playbook
 
-When you see a `REFRESH_TOKEN_REUSE` event:
+When you see `REFRESH_TOKEN_REUSE` or `REFRESH_TOKEN_REUSE_CONTAINED`:
 
 1. **Identify the user.** Resolve `accountId` through recent
    `gojira.whoami` audit entries or the stored upstream token.
@@ -154,9 +200,12 @@ When you see a `REFRESH_TOKEN_REUSE` event:
    `listRecentOperations` or `getOperation` to review before/after state.
 5. **Revert what is safely reversible.** Use
    `gojira.revertOperation(op_id, commit:true)` where supported.
-6. **Notify and reauthenticate the user.** Review unrecognized Atlassian app
+6. **Act on policy.** Strict mode has already revoked the family. For a contained
+   event, explicitly revoke/reauthenticate unless client telemetry explains the
+   stale process and compromise is ruled out.
+7. **Notify and reauthenticate the user.** Review unrecognized Atlassian app
    grants and rotate upstream credentials if compromise is plausible.
-7. **Hunt the source.** Check operator hosts, debug logs, shared environment
+8. **Hunt the source.** Check operator hosts, debug logs, shared environment
    files, proxies, and any other bearer-handling surface.
 
 An isolated `REFRESH_TOKEN_IDEMPOTENT_REPLAY` event is expected retry telemetry,
